@@ -680,11 +680,9 @@ class Explore:
                         if not has_had_timeout[0]:
                             to_process.put((grid_idx, k), timeout=60)
                         in_queue.add(k)
-
                     tqdm.write('Clear queue')
                     for to_yield in queue_process_min(0):
                         yield to_yield
-
                     tqdm.write('Done iter grid')
 
                 def get_repr(i_grid, key):
@@ -731,19 +729,7 @@ class Explore:
                                 cell.chosen_since_new)
                             self.grid[new_key].set_action_times(
                                 cell.action_times)
-
-                    if not self.args.reset_cell_on_update:
-                        # NB: this is the ONLY place where accessing these attributes using _ is valid!!!
-                        self.grid[new_key]._seen_times += cell.seen_times_diff
-                        self.grid[
-                            new_key]._chosen_times += cell.chosen_times_diff
-                        self.grid[
-                            new_key]._chosen_since_new += cell.chosen_since_new_diff
-                        self.grid[
-                            new_key]._action_times += cell.action_times_diff
-
                     self.selector.cell_update(new_key, self.grid[new_key])
-
                 tqdm.write('clearing processes')
                 for _ in range(n_processes):
                     to_process.put((None, None), block=False)
@@ -754,15 +740,12 @@ class Explore:
                         p.terminate()
                         p.join()
                 tqdm.write('processes cleared')
-
             tqdm.write(
                 f'Recomputing the grid took {time.time() - start} seconds')
-
             self.prev_len_grid = len(self.grid)
             tqdm.write(
                 f'New size: {len(self.grid)}. Old size: {len(self.former_grids[-1])}'
             )
-
             self.save_checkpoint('_post_recompute')
 
     def get_pos(self):
@@ -881,70 +864,6 @@ class Explore:
                            'ret',
                            enabled=info.enabled)
 
-    def sample_only_cycle(self):
-        # Choose a bunch of cells, send them to the workers for processing, then combine the results.
-        # A lot of what this function does is only aimed at minimizing the amount of data that needs
-        # to be pickled to the workers, which is why it sets a lot of variables to None only to restore
-        # them later.
-        global POOL
-        chosen_cells = []
-        cell_keys = self.selector.choose_cell(self.grid,
-                                              size=self.args.batch_size)
-        for i, cell_key in enumerate(cell_keys):
-            cell_copy = self.grid[cell_key]
-            seed = random.randint(0, 2**31)
-            chosen_cells.append(
-                TimedPickle((cell_key, cell_copy, seed, len(
-                    ENV.rooms), self.env_info[0].TARGET_SHAPE,
-                             self.env_info[0].MAX_PIX_VALUE),
-                            'args',
-                            enabled=(i == 0 and False)))
-
-        # NB: save some of the attrs that won't be necessary but are very large, and set them to none instead,
-        #     this way they won't be pickled.
-        cache = {}
-        to_save = [
-            'grid', 'real_grid', 'former_grids', 'experience_prev_ids',
-            'experience_actions', 'experience_cells', 'experience_rewards',
-            'experience_scores', 'experience_lens', 'selector',
-            'dynamic_state_frame_sets', 'random_recent_frames', 'pool_class'
-        ]
-        for attr in to_save:
-            cache[attr] = getattr(self, attr)
-            setattr(self, attr, None)
-
-        trajectories = [
-            e.data for e in POOL.map(self.process_cell, chosen_cells)
-        ]
-        if self.args.reset_pool and (self.cycles + 1) % 100 == 0:
-            POOL.close()
-            POOL.join()
-            POOL = None
-            gc.collect()
-            POOL = self.pool_class(self.args.n_cpus)
-        chosen_cells = [e.data for e in chosen_cells]
-
-        for attr, v in cache.items():
-            setattr(self, attr, v)
-
-        # Note: we do this now because starting here we're going to be concatenating the trajectories
-        # of these cells, and they need to remain the same!
-        chosen_cells = [(k, copy.copy(c), s, n, shape, pix)
-                        for k, c, s, n, shape, pix in chosen_cells]
-
-        for ((cell_key, cell_copy, seed, _, _, _),
-             (_, end_trajectory, ft, fc,
-              known_rooms)) in zip(chosen_cells, trajectories):
-
-            for i, elem in enumerate(end_trajectory):
-                if i == len(end_trajectory) - self.args.ignore_death:
-                    break
-
-                if not elem.done:
-                    if elem.to.frame is not None and (
-                            random.random() < self.args.recent_frame_add_prob):
-                        self.random_recent_frames.add(elem.to.frame)
-
     def run_cycle(self):
         # Choose a bunch of cells, send them to the workers for processing, then combine the results.
         # A lot of what this function does is only aimed at minimizing the amount of data that needs
@@ -1056,11 +975,6 @@ class Explore:
 
                 if not self.args.use_real_pos:
                     self.real_grid.add(elem.real_pos)
-
-                if not isinstance(
-                        potential_cell_key, tuple
-                ) and potential_cell_key != DONE and potential_cell_key.level > 0:
-                    self.seen_level_1 = True
 
                 was_in_grid = True
                 if potential_cell_key != old_potential_cell_key:

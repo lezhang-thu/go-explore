@@ -182,9 +182,6 @@ class Cell:
     def __init__(self,
                  score=-infinity,
                  seen_times=0,
-                 chosen_times=0,
-                 chosen_since_new=0,
-                 action_times=0,
                  trajectory_len=infinity,
                  restore=None,
                  exact_pos=None,
@@ -192,15 +189,7 @@ class Cell:
                  traj_last=None,
                  cell_frame=None):
         self.score = score
-
         self._seen_times = seen_times
-        self._seen_times_diff = 0
-        self._chosen_times = chosen_times
-        self._chosen_times_diff = 0
-        self._chosen_since_new = chosen_since_new
-        self._chosen_since_new_diff = 0
-        self._action_times = action_times
-        self._action_times_diff = 0
 
         self.trajectory_len = trajectory_len
         self.restore = restore
@@ -210,68 +199,14 @@ class Cell:
         self.cell_frame = cell_frame
 
     @property
-    def chosen_times(self):
-        return self._chosen_times
-
-    @property
-    def chosen_times_diff(self):
-        return self._chosen_times_diff
-
-    def inc_chosen_times(self, value):
-        self._chosen_times += value
-        self._chosen_times_diff += value
-
-    def set_chosen_times(self, value):
-        self._chosen_times = value
-        self._chosen_times_diff = value
-
-    @property
     def seen_times(self):
         return self._seen_times
 
-    @property
-    def seen_times_diff(self):
-        return self._seen_times_diff
-
     def inc_seen_times(self, value):
         self._seen_times += value
-        self._seen_times_diff += value
 
     def set_seen_times(self, value):
         self._seen_times = value
-        self._seen_times_diff = value
-
-    @property
-    def chosen_since_new(self):
-        return self._chosen_since_new
-
-    @property
-    def chosen_since_new_diff(self):
-        return self._chosen_since_new_diff
-
-    def inc_chosen_since_new(self, value):
-        self._chosen_since_new += value
-        self._chosen_since_new_diff += value
-
-    def set_chosen_since_new(self, value):
-        self._chosen_since_new = value
-        self._chosen_since_new_diff = value
-
-    @property
-    def action_times(self):
-        return self._action_times
-
-    @property
-    def action_times_diff(self):
-        return self._action_times_diff
-
-    def inc_action_times(self, value):
-        self._action_times += value
-        self._action_times_diff += value
-
-    def set_action_times(self, value):
-        self._action_times = value
-        self._action_times_diff = value
 
 
 @dataclass
@@ -723,12 +658,6 @@ class Explore:
                         self.grid[new_key].cell_frame = cell.cell_frame
                         if self.args.reset_cell_on_update:
                             self.grid[new_key].set_seen_times(cell.seen_times)
-                            self.grid[new_key].set_chosen_times(
-                                cell.chosen_times)
-                            self.grid[new_key].set_chosen_since_new(
-                                cell.chosen_since_new)
-                            self.grid[new_key].set_action_times(
-                                cell.action_times)
                     self.selector.cell_update(new_key, self.grid[new_key])
                 tqdm.write('clearing processes')
                 for _ in range(n_processes):
@@ -935,8 +864,6 @@ class Explore:
                     ENV.rooms[k] = known_rooms[k]
 
             start_cell = self.grid[cell_key]
-            start_cell.inc_chosen_times(1)
-            start_cell.inc_chosen_since_new(1)
             start_cell.inc_seen_times(1)
             self.selector.cell_update(cell_key, start_cell)
             cur_score = cell_copy.score
@@ -993,8 +920,6 @@ class Explore:
                 full_traj_len = cell_copy.trajectory_len + i + 1
                 cur_score += elem.reward
 
-                potential_cell.inc_action_times(1)
-
                 # Note: the DONE element should have a 0% chance of being selected, so OK to add the cell if it is in the DONE state.
                 if (elem.to.restore is not None or potential_cell_key
                         == DONE) and self.should_accept_cell(
@@ -1002,7 +927,6 @@ class Explore:
                     if self.args.use_real_pos:
                         self.real_grid.add(elem.real_pos)
 
-                    start_cell.set_chosen_since_new(0)
                     cells_to_reset.add(potential_cell_key)
                     potential_cell.trajectory_len = full_traj_len
                     potential_cell.restore = elem.to.restore
@@ -1021,10 +945,7 @@ class Explore:
 
         if self.args.reset_cell_on_update:
             for cell_key in cells_to_reset:
-                self.grid[cell_key].set_chosen_times(0)
-                self.grid[cell_key].set_chosen_since_new(0)
                 self.grid[cell_key].set_seen_times(0)
-                self.grid[cell_key].set_action_times(0)
 
         return [(k) for k, c, s, n, shape, pix in chosen_cells], trajectories
 

@@ -7,7 +7,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .import_ai import *
 from goexplore_py.goexplore import DONE
 
 
@@ -17,20 +16,7 @@ class Weight:
     power: float = 1.0
 
     def __repr__(self):
-        return f'w={self.weight:.2f}=p={self.power:.2f}'
-
-
-def numberOfSetBits(i):
-    i = i - ((i >> 1) & 0x55555555)
-    i = (i & 0x33333333) + ((i >> 2) & 0x33333333)
-    return (((i + (i >> 4) & 0xF0F0F0F) * 0x1010101) & 0xffffffff) >> 24
-
-
-def convert_score(e):
-    # TODO: this doesn't work when actual score is used!! Fix?
-    if isinstance(e, tuple):
-        return len(e)
-    return numberOfSetBits(e)
+        return f'w={self.weight:.2f} p={self.power:.2f}'
 
 
 class WeightedSelector:
@@ -47,76 +33,29 @@ class WeightedSelector:
         self.cells = []
         self.all_weights_nparray = None
         self.cell_pos = {}
-        self.cell_score = {}
-        self.possible_scores = defaultdict(int)
         self.to_update = set()
-        self.update_all = False
-
-    def get_score(self, cell_key, cell):
-        if cell_key == DONE:
-            return 0.0
-        else:
-            return cell.score
 
     def cell_update(self, cell_key, cell):
-        prev_possible_scores = len(self.possible_scores)
-        is_new = cell_key not in self.cell_pos
-        if is_new:
+        if cell_key not in self.cell_pos:
             self.cell_pos[cell_key] = len(self.all_weights)
             self.all_weights.append(0.0)
             self.cells.append(cell_key)
             self.to_choose_idxs.append(len(self.to_choose_idxs))
             self.all_weights_nparray = None
-
-            if cell_key != DONE:
-                self.cell_score[cell_key] = self.get_score(cell_key, cell)
-                self.possible_scores[self.get_score(cell_key, cell)] += 1
-        elif cell_key != DONE:
-            score = self.get_score(cell_key, cell)
-            old_score = self.cell_score[cell_key]
-            self.possible_scores[score] += 1
-            self.possible_scores[old_score] -= 1
-            self.cell_score[cell_key] = score
-            if self.possible_scores[old_score] == 0:
-                del self.possible_scores[old_score]
         self.to_update.add(cell_key)
 
-    def compute_weight(self, value, weight):
-        return weight.weight * 1 / (value + 1)**weight.power
-
-    def get_seen_weight(self, cell):
-        return self.compute_weight(cell.seen_times, self.seen)
-
-    def get_weight(self, cell_key, cell, possible_scores, known_cells):
-        if cell_key == DONE:
-            return 0.0
-        return self.get_seen_weight(cell)
+    def get_weight(self, cell_key, cell):
+        return 0.0 if cell_key == DONE else self.seen.weight * 1 / (
+            cell.seen_times + 1)**self.seen.power
 
     def update_weights(self, known_cells):
         if len(known_cells) == 0:
             return
-
-        if self.update_all:
-            to_update = self.cells
-        else:
-            to_update = self.to_update
-
-        for example_key in known_cells:
-            if example_key is not None:
-                break
-
-        possible_scores = sorted(self.possible_scores,
-                                 key=((lambda x: x) if isinstance(
-                                     example_key, tuple) else convert_score))
-        for cell in to_update:
+        for cell in self.to_update:
             idx = self.cell_pos[cell]
-            self.all_weights[idx] = self.get_weight(cell, known_cells[cell],
-                                                    possible_scores,
-                                                    known_cells)
+            self.all_weights[idx] = self.get_weight(cell, known_cells[cell])
             if self.all_weights_nparray is not None:
                 self.all_weights_nparray[idx] = self.all_weights[idx]
-
-        self.update_all = False
         self.to_update = set()
 
     def choose_cell(self, known_cells, size=1):
@@ -151,4 +90,4 @@ class WeightedSelector:
         return [to_choose[i] for i in idxs if to_choose[i] != DONE]
 
     def __repr__(self):
-        return f'weight-seen-{self.seen}-chosen-{self.chosen}-chosen-since-new-{self.chosen_since_new_weight}-action-{self.action}-room-{self.room_cells}-dir-{self.dir_weights}'
+        return f'weight-seen-{self.seen}'

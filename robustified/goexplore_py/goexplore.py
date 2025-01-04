@@ -43,22 +43,6 @@ class LPool:
         return self.pool.map(f, r)
 
 
-class SyncPool:
-
-    def __init__(self, n_cpus, maxtasksperchild=100):
-        pass
-
-    def map(self, f, r):
-        res = []
-        f_pickle = pickle.dumps(f)
-        for e in r:
-            e = pickle.loads(pickle.dumps(e))
-            f2 = pickle.loads(f_pickle)
-            res.append(f2(e))
-
-        return res
-
-
 def run_f_seeded(args):
     f, seed, args = args
     with use_seed(seed):
@@ -84,99 +68,6 @@ def seed_pool_wrapper(pool_class):
     return f
 
 
-class Discretizer:
-
-    def __init__(self, attr, sort=False):
-        self.attr = attr
-        self.sort = sort
-        self.cur_pos = None
-
-    def apply(self, pos):
-        self.cur_pos = pos
-        obj = getattr(pos, self.attr)
-        res = self.apply_rec(obj)
-        self.cur_pos = None
-        return res
-
-    def apply_rec(self, obj):
-        if isinstance(obj, (list, tuple, np.ndarray)):
-            res = tuple(self.apply_rec(e) for e in obj)
-            if self.sort:
-                return tuple(sorted(res))
-            else:
-                return res
-        return self.apply_scalar(obj)
-
-
-class FetchConditionalObject:
-
-    def __init__(self, object_pos, ifinpos, ifnotinpos):
-        self.object_pos = object_pos
-        self.ifinpos = ifinpos
-        self.ifnotinpos = ifnotinpos
-
-        assert self.ifinpos.attr == self.ifnotinpos.attr
-        self.attr = self.ifinpos.attr
-
-    def apply(self, obj):
-        if set(obj.object_pos) == set(['0000'
-                                       ]) or self.object_pos in obj.object_pos:
-            return self.ifinpos.apply(obj)
-        else:
-            return self.ifnotinpos.apply(obj)
-
-
-class GridDimension(Discretizer):
-
-    def __init__(self, attr, div, offset=0, sort=False):
-        super().__init__(attr, sort=sort)
-        self.div = div
-        self.offset = offset
-
-    def apply_scalar(self, scalar):
-        if scalar is None or isinstance(scalar, str):
-            return scalar
-        if self.div == 1:
-            return scalar
-        return int(np.floor((scalar + self.offset) / self.div))
-
-    def __repr__(self):
-        return f'GridDimension("{self.attr}", {self.div}, {self.offset})'
-
-
-class SingleCell(Discretizer):
-
-    def __init__(self, attr, value, sort=False):
-        super().__init__(attr, sort=sort)
-        self.value = value
-
-    def apply(self, value):
-        return self.value
-
-
-class GridEquality(Discretizer):
-
-    def __init__(self, attr, value, sort=False):
-        super().__init__(attr, sort=sort)
-        self.value = value
-
-    def apply_scalar(self, scalar):
-        return int(scalar == self.value)
-
-    def __repr__(self):
-        return f'GridEquality("{self.attr}", {self.value})'
-
-
-class GridLambda(Discretizer):
-
-    def __init__(self, attr, fn, sort=False):
-        super().__init__(attr, sort=sort)
-        self.fn = fn
-
-    def apply_scalar(self, scalar):
-        return self.fn(scalar)
-
-
 class Cell:
 
     def __init__(self,
@@ -185,7 +76,6 @@ class Cell:
                  trajectory_len=infinity,
                  restore=None,
                  exact_pos=None,
-                 real_cell=None,
                  traj_last=None,
                  cell_frame=None):
         self.score = score
@@ -194,7 +84,6 @@ class Cell:
         self.trajectory_len = trajectory_len
         self.restore = restore
         self.exact_pos = exact_pos
-        self.real_cell = real_cell
         self.traj_last = traj_last
         self.cell_frame = cell_frame
 
@@ -221,12 +110,11 @@ class PosInfo:
 
 @dataclass
 class TrajectoryElement:
-    __slots__ = ['to', 'action', 'reward', 'done', 'real_pos']
+    __slots__ = ['to', 'action', 'reward', 'done']
     to: PosInfo
     action: int
     reward: float
     done: bool
-    real_pos: MontezumaPosLevel
 
 
 Experience = tuple
@@ -313,8 +201,8 @@ class FormerGrids:
 
 class Explore:
 
-    def __init__(self, explorer_policy, cell_selector, env, grid_info: tuple,
-                 pool_class, args, important_attrs):
+    def __init__(self, explorer_policy, cell_selector, env, pool_class, args,
+                 important_attrs):
         global POOL, ENV
         self.args = args
         self.important_attrs = important_attrs
@@ -323,21 +211,16 @@ class Explore:
         self.env_info = env
         self.make_env()
         self.pool_class = pool_class
-        if self.args.reset_pool:
-            POOL = self.pool_class(multiprocessing.cpu_count() * 2)
-        else:
-            POOL = self.pool_class(multiprocessing.cpu_count() * 2,
-                                   maxtasksperchild=100)
+        POOL = self.pool_class(multiprocessing.cpu_count() * 2,
+                               maxtasksperchild=100)
 
         self.explorer = explorer_policy
         self.selector = cell_selector
-        self.grid_info = grid_info
         self.grid = defaultdict(Cell)
         self.frames_true = 0
         self.frames_compute = 0
         self.start = None
         self.cycles = 0
-        self.seen_level_1 = False
         self.dynamic_state_split_rules = (None, None, {})
         self.dynamic_state_frame_sets = defaultdict(set)
         self.random_recent_frames = RotatingSet(self.args.max_recent_frames)
@@ -355,7 +238,6 @@ class Explore:
         self.grid[cell_key].trajectory_len = 0
         self.grid[cell_key].score = 0
         self.grid[cell_key].exact_pos = self.get_pos()
-        self.grid[cell_key].real_cell = self.get_real_cell()
         self.grid[cell_key].traj_last = 0
         self.grid[cell_key].cell_frame = self.get_frame(True)
         # Create the DONE cell
@@ -376,9 +258,6 @@ class Explore:
         self.experience_lens = [0]
 
         self.last_added_cell = 0
-
-        self.real_cell = None
-
         self.gripped_info_count = {}
 
     def make_env(self):
@@ -388,13 +267,11 @@ class Explore:
             ENV.reset()
 
     def reset(self):
-        self.real_cell = None
         self.pos_cache = None
         self.make_env()
         return ENV.reset()
 
     def step(self, action):
-        self.real_cell = None
         self.pos_cache = None
         return ENV.step(action)
 
@@ -418,7 +295,6 @@ class Explore:
                     dynamic_repr[-1]]
             else:
                 break
-
         return tuple(dynamic_repr)
 
     def try_split_frames(self, frames):
@@ -653,7 +529,6 @@ class Explore:
                         self.grid[new_key].trajectory_len = cell.trajectory_len
                         self.grid[new_key].restore = cell.restore
                         self.grid[new_key].exact_pos = cell.exact_pos
-                        self.grid[new_key].real_cell = cell.real_cell
                         self.grid[new_key].traj_last = cell.traj_last
                         self.grid[new_key].cell_frame = cell.cell_frame
                         if self.args.reset_cell_on_update:
@@ -678,32 +553,22 @@ class Explore:
             self.save_checkpoint('_post_recompute')
 
     def get_pos(self):
-        if self.args.use_real_pos:
-            return self.get_real_pos()
-        else:
-            if not self.pos_cache:
-                if self.args.dynamic_state:
-                    self.pos_cache = self.get_dynamic_repr(
-                        self.get_frame(False))
-                else:
-                    self.pos_cache = (self.get_frame(True), )
-            return self.pos_cache
+        if not self.pos_cache:
+            if self.args.dynamic_state:
+                self.pos_cache = self.get_dynamic_repr(self.get_frame(False))
+            else:
+                self.pos_cache = (self.get_frame(True), )
+        return self.pos_cache
 
     def get_frame(self, asbytes):
-        if not hasattr(ENV, 'state') or self.args.use_real_pos:
-            return None
         frame = ENV.state[-1]
         if asbytes:
             return frame.tobytes()
         return frame
 
-    def get_real_pos(self):
-        return ENV.get_pos()
-
     def get_pos_info(self, include_restore=True):
         return PosInfo(
-            self.get_pos() if self.args.use_real_pos else None,
-            self.get_cell(), None,
+            None, self.get_cell(), None,
             self.get_restore() if include_restore else None,
             self.get_frame(True) if self.args.dynamic_state else None)
 
@@ -711,26 +576,12 @@ class Explore:
         return ENV.get_restore()
 
     def restore(self, val):
-        self.real_cell = None
         self.pos_cache = None
         self.make_env()
         ENV.restore(val)
 
-    def get_real_cell(self):
-        if self.real_cell is None:
-            pos = self.get_real_pos()
-            res = {}
-            for dimension in self.grid_info:
-                res[dimension.attr] = dimension.apply(pos)
-            self.real_cell = pos.__class__(**res)
-        return self.real_cell
-
     def get_cell(self):
-        if self.args.use_real_pos:
-            return self.get_real_cell()
-        else:
-            pos = self.get_pos()
-            return pos
+        return self.get_pos()
 
     def run_explorer(self, explorer, start_cell=None, max_steps=-1):
         trajectory = []
@@ -748,7 +599,6 @@ class Explore:
                     action,
                     reward,
                     done,
-                    self.get_real_cell(),
                 ))
             if done:
                 break
@@ -761,7 +611,7 @@ class Explore:
 
     def process_cell(self, info):
         # This function runs in a SUBPROCESS, and processes a single cell.
-        cell_key, cell, seed, known_rooms, target_shape, max_pix = info.data
+        cell_key, cell, seed, target_shape, max_pix = info.data
         assert cell_key != DONE
         self.env_info[0].TARGET_SHAPE = target_shape
         self.env_info[0].MAX_PIX_VALUE = max_pix
@@ -774,24 +624,11 @@ class Explore:
         else:
             assert cell.trajectory_len == 0, 'Cells must have a restore unless they are the initial state'
             self.reset()
-
         end_trajectory = self.run_seed(seed, max_steps=self.args.explore_steps)
-
-        # # We are not done, check that doing nothing for self.args.ignore_death steps won't kill us.
-        if self.args.ignore_death > 0:
-            if not end_trajectory[-1].done:
-                assert self.args.ignore_death == 1
-                end_trajectory += self.run_explorer(
-                    DoNothingExplorer(), max_steps=self.args.ignore_death)
-
-        known_room_data = {}
-        if len(ENV.rooms) > known_rooms:
-            known_room_data = ENV.rooms
-
-        return TimedPickle((cell_key, end_trajectory, self.frames_true,
-                            self.frames_compute, known_room_data),
-                           'ret',
-                           enabled=info.enabled)
+        return TimedPickle(
+            (cell_key, end_trajectory, self.frames_true, self.frames_compute),
+            'ret',
+            enabled=info.enabled)
 
     def run_cycle(self):
         # Choose a bunch of cells, send them to the workers for processing, then combine the results.
@@ -813,11 +650,11 @@ class Explore:
             cell_copy = self.grid[cell_key]
             seed = random.randint(0, 2**31)
             chosen_cells.append(
-                TimedPickle((cell_key, cell_copy, seed, len(
-                    ENV.rooms), self.env_info[0].TARGET_SHAPE,
-                             self.env_info[0].MAX_PIX_VALUE),
-                            'args',
-                            enabled=(i == 0 and False)))
+                TimedPickle(
+                    (cell_key, cell_copy, seed, self.env_info[0].TARGET_SHAPE,
+                     self.env_info[0].MAX_PIX_VALUE),
+                    'args',
+                    enabled=False))
 
         # NB: save some of the attrs that won't be necessary but are very large, and set them to none instead,
         #     this way they won't be pickled.
@@ -852,16 +689,11 @@ class Explore:
                         for k, c, s, n, shape, pix in chosen_cells]
         cells_to_reset = set()
 
-        for ((cell_key, cell_copy, seed, _, _, _),
-             (_, end_trajectory, ft, fc,
-              known_rooms)) in zip(chosen_cells, trajectories):
+        for ((cell_key, cell_copy, _, _, _, _),
+             (_, end_trajectory, ft, fc)) in zip(chosen_cells, trajectories):
             self.frames_true += ft
             self.frames_compute += fc
             seen_cells = set([cell_key])
-
-            for k in known_rooms:
-                if k not in ENV.rooms:
-                    ENV.rooms[k] = known_rooms[k]
 
             start_cell = self.grid[cell_key]
             start_cell.inc_seen_times(1)
@@ -888,22 +720,13 @@ class Explore:
                 prev_id = self.cur_experience
                 self.cur_experience += 1
 
-                if i == len(end_trajectory) - self.args.ignore_death:
-                    break
-
                 potential_cell_key = elem.to.cell
                 if elem.done:
                     potential_cell_key = DONE
                 else:
                     if elem.to.frame is not None and (
-                            random.random() < self.args.recent_frame_add_prob
-                    ):  #or len(self.random_recent_frames) < self.random_recent_frames.max_size):
+                            random.random() < self.args.recent_frame_add_prob):
                         self.random_recent_frames.add(elem.to.frame)
-
-                if not self.args.use_real_pos:
-                    self.real_grid.add(elem.real_pos)
-
-                was_in_grid = True
                 if potential_cell_key != old_potential_cell_key:
                     was_in_grid = potential_cell_key in self.grid
                     potential_cell = self.grid[potential_cell_key]
@@ -915,7 +738,6 @@ class Explore:
                                                       potential_cell)
                         else:
                             self.last_added_cell = self.frames_compute
-
                 old_potential_cell_key = potential_cell_key
                 full_traj_len = cell_copy.trajectory_len + i + 1
                 cur_score += elem.reward
@@ -924,9 +746,6 @@ class Explore:
                 if (elem.to.restore is not None or potential_cell_key
                         == DONE) and self.should_accept_cell(
                             potential_cell, cur_score, full_traj_len):
-                    if self.args.use_real_pos:
-                        self.real_grid.add(elem.real_pos)
-
                     cells_to_reset.add(potential_cell_key)
                     potential_cell.trajectory_len = full_traj_len
                     potential_cell.restore = elem.to.restore
@@ -934,25 +753,17 @@ class Explore:
                     potential_cell.score = cur_score
                     if cur_score > self.max_score:
                         self.max_score = cur_score
-                    potential_cell.real_cell = elem.real_pos
-                    if self.args.use_real_pos:
-                        potential_cell.exact_pos = elem.to.exact
                     potential_cell.traj_last = self.cur_experience - 1
                     potential_cell.cell_frame = elem.to.frame
 
                     self.selector.cell_update(potential_cell_key,
                                               potential_cell)
-
         if self.args.reset_cell_on_update:
             for cell_key in cells_to_reset:
                 self.grid[cell_key].set_seen_times(0)
-
         return [(k) for k, c, s, n, shape, pix in chosen_cells], trajectories
 
     def should_accept_cell(self, potential_cell, cur_score, full_traj_len):
-        if self.args.prob_override > 0.0000000001 and random.random(
-        ) < self.args.prob_override:
-            return True
         if self.args.optimize_score:
             return (cur_score > potential_cell.score
                     or (full_traj_len < potential_cell.trajectory_len
@@ -961,7 +772,6 @@ class Explore:
 
     def save_checkpoint(self, suffix=''):
         # Quick bookkeeping, printing update
-        seen_level_1 = self.seen_level_1
         filename = f'{self.args.base_path}/{self.frames_true:0{n_digits}}_{self.frames_compute:0{n_digits}}{suffix}'
 
         def print_sorted_keys(items):

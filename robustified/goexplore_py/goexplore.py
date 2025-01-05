@@ -21,18 +21,6 @@ compress_kwargs = {}
 n_digits = 20
 DONE = None
 
-perf_array = None
-
-
-class MemInfo:
-    E_VIRT_USE_MEAN = 0
-    E_VIRT_USE_MAX = 1
-    E_VIRT_USE_CUR = 2
-    E_CPU_MEAN = 3
-    E_CPU_MAX = 4
-    E_CPU_CUR = 5
-    ARRAY_SIZE = 6
-
 
 class LPool:
 
@@ -75,7 +63,6 @@ class Cell:
                  seen_times=0,
                  trajectory_len=infinity,
                  restore=None,
-                 exact_pos=None,
                  traj_last=None,
                  cell_frame=None):
         self.score = score
@@ -83,7 +70,6 @@ class Cell:
 
         self.trajectory_len = trajectory_len
         self.restore = restore
-        self.exact_pos = exact_pos
         self.traj_last = traj_last
         self.cell_frame = cell_frame
 
@@ -100,8 +86,7 @@ class Cell:
 
 @dataclass
 class PosInfo:
-    __slots__ = ['exact', 'cell', 'state', 'restore', 'frame']
-    exact: tuple
+    __slots__ = ['cell', 'state', 'restore', 'frame']
     cell: tuple
     state: typing.Any
     restore: typing.Any
@@ -222,7 +207,6 @@ class Explore:
         self.start = None
         self.cycles = 0
         self.dynamic_state_split_rules = (None, None, {})
-        self.dynamic_state_frame_sets = defaultdict(set)
         self.random_recent_frames = RotatingSet(self.args.max_recent_frames)
         self.last_recompute_dynamic_state = -self.args.recompute_dynamic_state_every + self.args.first_compute_dynamic_state
 
@@ -237,14 +221,12 @@ class Explore:
         self.grid[cell_key] = Cell()
         self.grid[cell_key].trajectory_len = 0
         self.grid[cell_key].score = 0
-        self.grid[cell_key].exact_pos = self.get_pos()
         self.grid[cell_key].traj_last = 0
         self.grid[cell_key].cell_frame = self.get_frame(True)
         # Create the DONE cell
         self.grid[DONE] = Cell()
         self.selector.cell_update(cell_key, self.grid[cell_key])
         self.selector.cell_update(DONE, self.grid[DONE])
-        self.real_grid = set()
         self.pos_cache = None
         self.former_grids = FormerGrids(args)
         self.former_grids.append(copy.deepcopy(self.grid))
@@ -256,9 +238,6 @@ class Explore:
         self.experience_rewards = [0]
         self.experience_scores = [0]
         self.experience_lens = [0]
-
-        self.last_added_cell = 0
-        self.gripped_info_count = {}
 
     def make_env(self):
         global ENV
@@ -445,7 +424,6 @@ class Explore:
             self.grid = defaultdict(Cell)
 
             start = time.time()
-
             for grid_idx in tqdm(reversed(range(len(self.former_grids))),
                                  desc='recompute_grid'):
                 tqdm.write('Loading grid')
@@ -528,7 +506,6 @@ class Explore:
                         self.grid[new_key].score = cell.score
                         self.grid[new_key].trajectory_len = cell.trajectory_len
                         self.grid[new_key].restore = cell.restore
-                        self.grid[new_key].exact_pos = cell.exact_pos
                         self.grid[new_key].traj_last = cell.traj_last
                         self.grid[new_key].cell_frame = cell.cell_frame
                         if self.args.reset_cell_on_update:
@@ -660,10 +637,10 @@ class Explore:
         #     this way they won't be pickled.
         cache = {}
         to_save = [
-            'grid', 'real_grid', 'former_grids', 'experience_prev_ids',
+            'grid', 'former_grids', 'experience_prev_ids',
             'experience_actions', 'experience_cells', 'experience_rewards',
             'experience_scores', 'experience_lens', 'selector',
-            'dynamic_state_frame_sets', 'random_recent_frames', 'pool_class'
+            'random_recent_frames', 'pool_class'
         ]
         for attr in to_save:
             cache[attr] = getattr(self, attr)
@@ -736,8 +713,6 @@ class Explore:
                         if was_in_grid:
                             self.selector.cell_update(potential_cell_key,
                                                       potential_cell)
-                        else:
-                            self.last_added_cell = self.frames_compute
                 old_potential_cell_key = potential_cell_key
                 full_traj_len = cell_copy.trajectory_len + i + 1
                 cur_score += elem.reward
@@ -778,10 +753,6 @@ class Explore:
             items = sorted(items.items(), key=lambda x: str(x[0]))
             return f'{{{", ".join(str(k) + ": " + str(v) for k, v in items)}}}'
 
-        for attr in self.important_attrs:
-            tqdm.write(
-                f'Cells at {attr}: {print_sorted_keys(Counter(getattr(e, attr) for e in self.real_grid))}'
-            )
         tqdm.write(f'Max score: {max(e.score for e in self.grid.values())}')
         tqdm.write(f'Compute cells: {len(self.grid)}')
 
@@ -808,20 +779,6 @@ class Explore:
         fastdump(
             grid_set,
             compress.open(filename + '_set' + compress_suffix, 'wb',
-                          **compress_kwargs))
-        fastdump(
-            self.real_grid,
-            compress.open(filename + '_set_real' + compress_suffix, 'wb',
-                          **compress_kwargs))
-
-        print(self.gripped_info_count)
-        perf_info = {'gripped_info': self.gripped_info_count}
-        for e in dir(MemInfo):
-            if e[:2] == 'E_':
-                perf_info[e] = perf_array[getattr(MemInfo, e)]
-        fastdump(
-            perf_info,
-            compress.open(filename + '_perf' + compress_suffix, 'wb',
                           **compress_kwargs))
 
         fastdump((self.experience_prev_ids, self.experience_actions,

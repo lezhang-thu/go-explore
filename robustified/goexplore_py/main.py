@@ -7,10 +7,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import sys
-from goexplore_py.randselectors import RepeatedRandomExplorer
-from goexplore_py.goexplore import Explore, LPool, seed_pool_wrapper
+
+sys.path.insert(0, '/home/ubuntu/lezhang.thu/go-explore/robustified')
+print(sys.path)
+import argparse, uuid, copy, glob
+import json, shutil, psutil, time
+from tqdm import tqdm
+import numpy as np
+
+from goexplore_py.randselectors import Weight, WeightedSelector
+from goexplore_py.explorers import RepeatedRandomExplorer
+from goexplore_py.goexplore import Explore, LPool, seed_pool_wrapper, DONE
 import goexplore_py.generic_atari_env as generic_atari_env
+from goexplore_py.utils import get_code_hash
 
 VERSION = 1
 
@@ -471,10 +482,6 @@ if __name__ == '__main__':
     if args.seed is not None:
         random.seed(args.seed)
         np.random.seed(args.seed + 1)
-
-    if args.total_timestep is not None:
-        args.timestep = args.total_timestep / args.nsubsteps
-    del args.total_timestep
 
     THRESH_TRUE = args.checkpoint_game
     THRESH_COMPUTE = args.checkpoint_compute

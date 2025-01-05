@@ -639,11 +639,11 @@ class Explore:
 
         # Note: we do this now because starting here we're going to be concatenating the trajectories
         # of these cells, and they need to remain the same!
-        chosen_cells = [(k, copy.copy(c), s, n, shape, pix)
-                        for k, c, s, n, shape, pix in chosen_cells]
+        chosen_cells = [(k, copy.copy(c), s, shape, pix)
+                        for k, c, s, shape, pix in chosen_cells]
         cells_to_reset = set()
 
-        for ((cell_key, cell_copy, _, _, _, _),
+        for ((cell_key, cell_copy, _, _, _),
              (_, end_trajectory, ft, fc)) in zip(chosen_cells, trajectories):
             self.frames_true += ft
             self.frames_compute += fc
@@ -713,7 +713,7 @@ class Explore:
         if self.args.reset_cell_on_update:
             for cell_key in cells_to_reset:
                 self.grid[cell_key].set_seen_times(0)
-        return [(k) for k, c, s, n, shape, pix in chosen_cells], trajectories
+        return [(k) for k, c, s, shape, pix in chosen_cells], trajectories
 
     def should_accept_cell(self, potential_cell, cur_score, full_traj_len):
         if self.args.optimize_score:

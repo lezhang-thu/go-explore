@@ -7,12 +7,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .explorers import *
-from .montezuma_env import *
 from .generic_atari_env import *
 from .utils import *
 import loky
-import gzip
 import bz2
 
 compress = bz2
@@ -227,7 +224,6 @@ class Explore:
         self.grid[DONE] = Cell()
         self.selector.cell_update(cell_key, self.grid[cell_key])
         self.selector.cell_update(DONE, self.grid[DONE])
-        self.pos_cache = None
         self.former_grids = FormerGrids(args)
         self.former_grids.append(copy.deepcopy(self.grid))
 
@@ -246,12 +242,10 @@ class Explore:
             ENV.reset()
 
     def reset(self):
-        self.pos_cache = None
         self.make_env()
         return ENV.reset()
 
     def step(self, action):
-        self.pos_cache = None
         return ENV.step(action)
 
     def get_dynamic_repr(self, orig_state):
@@ -303,17 +297,10 @@ class Explore:
             return norment(dist) / np.sqrt(
                 abs(len(dist) - target_len) / target_len + 1)
 
-        unif_score_cache = {}
-
-        def unif_dist_score(l):
-            if l not in unif_score_cache:
-                unif_score_cache[l] = get_dist_score([1 / l] * l)
-            return unif_score_cache[l]
-
         best_shape = (random.randint(1, self.normal_frame_shape[0] - 1),
                       random.randint(1, self.normal_frame_shape[1] - 1))
         best_pix_val = random.randint(2, 255)
-        best_score = -infinity  #get_dist_score([1 / len(frames) for _ in range(len(frames))])
+        best_score = -infinity
         best_n = 0
         seen = set()
 
@@ -418,7 +405,6 @@ class Explore:
             self.dynamic_state_split_rules = (best_shape, best_pix_val, {})
 
             self.random_recent_frames.clear()
-
             self.selector.clear_all_cache()
             self.former_grids.append(self.grid)
             self.grid = defaultdict(Cell)
@@ -529,14 +515,6 @@ class Explore:
             )
             self.save_checkpoint('_post_recompute')
 
-    def get_pos(self):
-        if not self.pos_cache:
-            if self.args.dynamic_state:
-                self.pos_cache = self.get_dynamic_repr(self.get_frame(False))
-            else:
-                self.pos_cache = (self.get_frame(True), )
-        return self.pos_cache
-
     def get_frame(self, asbytes):
         frame = ENV.state[-1]
         if asbytes:
@@ -545,7 +523,7 @@ class Explore:
 
     def get_pos_info(self, include_restore=True):
         return PosInfo(
-            None, self.get_cell(), None,
+            self.get_cell(), None,
             self.get_restore() if include_restore else None,
             self.get_frame(True) if self.args.dynamic_state else None)
 
@@ -553,12 +531,11 @@ class Explore:
         return ENV.get_restore()
 
     def restore(self, val):
-        self.pos_cache = None
         self.make_env()
         ENV.restore(val)
 
     def get_cell(self):
-        return self.get_pos()
+        return self.get_dynamic_repr(self.get_frame(False))
 
     def run_explorer(self, explorer, start_cell=None, max_steps=-1):
         trajectory = []
@@ -685,7 +662,7 @@ class Explore:
                 possible_experience_cell = (self.dynamic_state_split_rules,
                                             (DONE
                                              if elem.done else elem.to.cell))
-                if not self.args.save_cells and not elem.done:
+                if not elem.done:
                     possible_experience_cell = 1
                 if len(self.experience_cells) > 0 and self.experience_cells[
                         -1] == possible_experience_cell:
@@ -748,10 +725,6 @@ class Explore:
     def save_checkpoint(self, suffix=''):
         # Quick bookkeeping, printing update
         filename = f'{self.args.base_path}/{self.frames_true:0{n_digits}}_{self.frames_compute:0{n_digits}}{suffix}'
-
-        def print_sorted_keys(items):
-            items = sorted(items.items(), key=lambda x: str(x[0]))
-            return f'{{{", ".join(str(k) + ": " + str(v) for k, v in items)}}}'
 
         tqdm.write(f'Max score: {max(e.score for e in self.grid.values())}')
         tqdm.write(f'Compute cells: {len(self.grid)}')

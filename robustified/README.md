@@ -85,16 +85,3 @@ You may then test the performance of your trained neural network using
 where <neural_net> is one of the files produced by the robustification phase and printed in the log as `Saving to ...`.
 This will produce `.json` files for each possible number of no-ops (from 0 to 30) with scores, levels
 and exact action sequences produced by the test runs.
-
-For the fetch environments, the steps are similar but with the `.sh` files containing `fetch`. In this context, `game`
-is the target shelf identifier, with the valid identifiers being `0001`, `0010`, `0100` and `1000`. These scripts also need to be run on 8 GPUs with MPI as described above to reproduce our exact results.
-
-Note that the `gen_demo`
-script for fetch produces 10 demos from a single exploration phase run, so you do not need to run the exploration phase
-multiple times and combine the demo files to run robustification.
-
-Crucially, the fetch environment requires that mujoco-py be installed, which itself requires that MuJoCo 2.0 be installed.
-It is also important that the folder which contains `goexplore_py` be in the PYTHONPATH during robustification.
-
-Finally, the two controls (vanilla PPO and PPO + IM) for fetch can be run using `./control_ppo_fetch.sh` and `./control_im_fetch.sh`.
-Both take as parameters the target shelf, result output folder and number of frames.

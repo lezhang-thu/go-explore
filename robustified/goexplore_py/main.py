@@ -12,10 +12,17 @@ import sys
 
 sys.path.insert(0, '/home/ubuntu/lezhang.thu/go-explore/robustified')
 print(sys.path)
-import argparse, uuid, copy, glob
-import json, shutil, psutil, time
-from tqdm import tqdm
+import argparse
+import copy
+import glob
+import json
+import shutil
+import psutil
+import time
+import uuid
+
 import numpy as np
+from tqdm import tqdm
 
 from goexplore_py.randselectors import Weight, WeightedSelector
 from goexplore_py.explorers import RepeatedRandomExplorer

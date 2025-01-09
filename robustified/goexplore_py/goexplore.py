@@ -506,6 +506,8 @@ class Explore:
             if ((max_steps > 0 and len(trajectory) >= max_steps)):
                 break
             action = explorer.get_action(ENV)
+            #print('ENV.action_space.n: {}'.format(ENV.action_space.n))
+            #exit(0)
             _, reward, done, state_sac_1 = self.step(action)
             # TODO
             # (state_sac_0, action, reward, state_sac_1, done)
@@ -558,6 +560,16 @@ class Explore:
         end_trajectory = self.run_seed(seed,
                                        state_sac_0,
                                        max_steps=self.args.explore_steps)
+        # debug
+        self.reset()
+        for action in cell.action_seq:
+            self.step(action)
+        assert np.all(
+            self.get_frame(True) == cell.cell_frame)
+        for t in end_trajectory:
+            self.step(t.action)
+            assert self.get_frame(True) == t.to.frame
+        
         return TimedPickle(
             (cell_key, end_trajectory, self.frames_true, self.frames_compute),
             'ret',
@@ -568,6 +580,7 @@ class Explore:
         # A lot of what this function does is only aimed at minimizing the amount of data that needs
         # to be pickled to the workers, which is why it sets a lot of variables to None only to restore
         # them later.
+        print('step once')
         global POOL
         if self.start is None:
             self.start = time.time()
@@ -655,8 +668,8 @@ class Explore:
                     cells_to_reset.add(potential_cell_key)
                     potential_cell.trajectory_len = full_traj_len
                     potential_cell.action_seq = np.concatenate(
-                        (start_cell.action_seq,
-                         np.asarray(act_seq, dtype=np.uint8)))
+                        (cell_copy.action_seq,
+                         np.array(act_seq, dtype=np.uint8)))
                     potential_cell.score = cur_score
                     if cur_score > self.max_score:
                         self.max_score = cur_score
@@ -664,7 +677,7 @@ class Explore:
 
                     # debug - check consistency
                     # go-step
-                    if len(start_cell.action_seq) > 20:
+                    if False and len(start_cell.action_seq) > 20:
                         _, state_sac_0 = self.reset()
                         for action in potential_cell.action_seq:
                             _, reward, done, state_sac_1 = self.step(action)
@@ -675,7 +688,13 @@ class Explore:
                             self.get_frame(True) == potential_cell.cell_frame):
                             print(start_cell.action_seq)
                             print(potential_cell.action_seq)
+                            print(potential_cell_key == DONE)
                             exit(0)
+                        else:
+                            print('*' * 20)
+                            print('success')
+                            print('{} + {}'.format(start_cell.action_seq, potential_cell.action_seq))
+                            print('*' * 20)
                         #assert np.all(
                         #    self.get_frame(True) == potential_cell.cell_frame), '\n{}\n{}\n{}\n'.format(
                         #        self.get_frame(True), potential_cell.cell_frame, potential_cell.action_seq)

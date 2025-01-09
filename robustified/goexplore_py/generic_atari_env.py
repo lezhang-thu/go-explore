@@ -113,26 +113,28 @@ class MyAtari:
             self._frames_sac.append(t)
         return copy.copy(self.state), self._stack_frame()
 
-    def get_restore(self):
-        return (self.unwrapped.clone_state(), copy.copy(self.state),
-                self.env._elapsed_steps, copy.copy(self._frames_sac))
+    #def get_restore(self):
+    #    return (self.unwrapped.clone_state(), copy.copy(self.state),
+    #            self.env._elapsed_steps, copy.copy(self._frames_sac))
 
-    def restore(self, data):
-        (full_state, state, elapsed_steps, t) = data
-        self.state = copy.copy(state)
-        # sac
-        self._frames_sac = copy.copy(t)
+    #def restore(self, data):
+    #    (full_state, state, elapsed_steps, t) = data
+    #    self.state = copy.copy(state)
+    #    # sac
+    #    self._frames_sac = copy.copy(t)
 
-        self.env.reset()
-        self.env._elapsed_steps = elapsed_steps
-        self.env.unwrapped.restore_state(full_state)
-        return copy.copy(self.state)
+    #    self.env.reset()
+    #    self.env._elapsed_steps = elapsed_steps
+    #    self.env.unwrapped.restore_state(full_state)
+    #    return copy.copy(self.state)
 
     def step(self, action) -> typing.Tuple[np.ndarray, float, bool, dict]:
         self.unprocessed_state, reward, done, lol = self.env.step(action)
         # sac
         self._frames_sac.append(self._process(self.unprocessed_state))
-        del lol
+        #print(lol)
+        #exit(0)
+        #del lol
         state_sac = self._stack_frame()
 
         self.state.append(convert_state(self.unprocessed_state))
@@ -145,16 +147,16 @@ class MyAtari:
 
         return copy.copy(self.state), reward, done, state_sac
 
-    def get_pos(self):
-        # NOTE: this only returns a dummy position
-        return AtariPosLevel()
+    #def get_pos(self):
+    #    # NOTE: this only returns a dummy position
+    #    return AtariPosLevel()
 
-    def render_with_known(self,
-                          known_positions,
-                          resolution,
-                          show=True,
-                          filename=None,
-                          combine_val=max,
-                          get_val=lambda x: x.score,
-                          minmax=None):
-        pass
+    #def render_with_known(self,
+    #                      known_positions,
+    #                      resolution,
+    #                      show=True,
+    #                      filename=None,
+    #                      combine_val=max,
+    #                      get_val=lambda x: x.score,
+    #                      minmax=None):
+    #    pass

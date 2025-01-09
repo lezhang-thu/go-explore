@@ -79,10 +79,9 @@ def _run(base_path, args):
     #    n_iters = 0
     #    prev_checkpoint = None
     if True:
-        start_time = time.time()
         def should_continue():
-            if MAX_TIME is not None and time.time() - start_time >= MAX_TIME:
-                return False
+            #if MAX_TIME is not None and time.time() - start_time >= MAX_TIME:
+            #    return False
             if MAX_FRAMES is not None and expl.frames_true >= MAX_FRAMES:
                 return False
             if MAX_FRAMES_COMPUTE is not None and expl.frames_compute >= MAX_FRAMES_COMPUTE:

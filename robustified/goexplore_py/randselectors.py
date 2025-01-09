@@ -79,6 +79,7 @@ class WeightedSelector:
             assert False, 'Incorrect length stuff'
 
         if len(self.cells) == 1:
+            assert self.cells[0] != DONE
             return [self.cells[0]] * size
         if self.all_weights_nparray is None:
             self.all_weights_nparray = np.array(self.all_weights)

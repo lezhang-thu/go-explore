@@ -23,7 +23,7 @@ DONE = None
 
 class LPool:
 
-    def __init__(self, n_cpus, maxtasksperchild=100):
+    def __init__(self, n_cpus):
         self.pool = loky.get_reusable_executor(n_cpus, timeout=100)
 
     def map(self, f, r):
@@ -96,11 +96,6 @@ class TrajectoryElement:
     action: int
     reward: float
     done: bool
-
-
-Experience = tuple
-
-# ### Main
 
 
 class RotatingSet:
@@ -195,8 +190,7 @@ class Explore:
 
         self.env_info = env
         self.make_env()
-        POOL = pool_class(multiprocessing.cpu_count() * 2,
-                          maxtasksperchild=100)
+        POOL = pool_class(multiprocessing.cpu_count(), )
 
         self.explorer = explorer_policy
         self.selector = cell_selector
@@ -396,8 +390,6 @@ class Explore:
                 > self.args.recompute_dynamic_state_every
                 or len(self.grid) > self.args.max_archive_size):
             return
-        if True: return
-
         if len(self.grid) > self.args.max_archive_size:
             tqdm.write(
                 'Recomputing representation because of archive size (should not happen too often)'
@@ -506,8 +498,6 @@ class Explore:
             if ((max_steps > 0 and len(trajectory) >= max_steps)):
                 break
             action = explorer.get_action(ENV)
-            #print('ENV.action_space.n: {}'.format(ENV.action_space.n))
-            #exit(0)
             _, reward, done, state_sac_1 = self.step(action)
             # TODO
             # (state_sac_0, action, reward, state_sac_1, done)
@@ -543,33 +533,18 @@ class Explore:
 
         # go-step
         _, state_sac_0 = self.reset()
-        for action in cell.action_seq:
-            _, reward, done, state_sac_1 = self.step(action)
-            # TODO
-            # (state_sac_0, action, reward, state_sac_1, done)
-            state_sac_0 = state_sac_1
-        assert np.all(
-            self.get_frame(True) == cell.cell_frame), '\n{}\n{}\n{}\n'.format(
-                self.get_frame(True), cell.cell_frame, cell.action_seq)
-        if len(cell.action_seq) > 0:
-            print('#' * 20)
-            print('hit once! {}'.format(len(cell.action_seq)))
+        #for action in cell.action_seq:
+        #    _, reward, done, state_sac_1 = self.step(action)
+        #    # TODO
+        #    # (state_sac_0, action, reward, state_sac_1, done)
+        #    state_sac_0 = state_sac_1
+        #assert np.all(self.get_frame(True) == cell.cell_frame)
 
         self.frames_true += len(cell.action_seq)
         # explore-step
         end_trajectory = self.run_seed(seed,
                                        state_sac_0,
                                        max_steps=self.args.explore_steps)
-        # debug
-        self.reset()
-        for action in cell.action_seq:
-            self.step(action)
-        assert np.all(
-            self.get_frame(True) == cell.cell_frame)
-        for t in end_trajectory:
-            self.step(t.action)
-            assert self.get_frame(True) == t.to.frame
-        
         return TimedPickle(
             (cell_key, end_trajectory, self.frames_true, self.frames_compute),
             'ret',
@@ -580,7 +555,6 @@ class Explore:
         # A lot of what this function does is only aimed at minimizing the amount of data that needs
         # to be pickled to the workers, which is why it sets a lot of variables to None only to restore
         # them later.
-        print('step once')
         global POOL
         if self.start is None:
             self.start = time.time()
@@ -614,12 +588,10 @@ class Explore:
         for attr in to_save:
             cache[attr] = getattr(self, attr)
             setattr(self, attr, None)
-
         trajectories = [
             e.data for e in POOL.map(self.process_cell, chosen_cells)
         ]
         chosen_cells = [e.data for e in chosen_cells]
-
         for attr, v in cache.items():
             setattr(self, attr, v)
 
@@ -628,13 +600,14 @@ class Explore:
         chosen_cells = [(k, copy.copy(c), s, shape, pix)
                         for k, c, s, shape, pix in chosen_cells]
         cells_to_reset = set()
-
         for ((cell_key, cell_copy, _, _, _),
              (_, end_trajectory, ft, fc)) in zip(chosen_cells, trajectories):
             self.frames_true += ft
             self.frames_compute += fc
 
             seen_cells = {cell_key}
+            # to alter within self.grid, should index by self.grid[cell_key]
+            # cell_copy is only a copy, not within self.grid
             start_cell = self.grid[cell_key]
             start_cell.inc_seen_times(1)
             self.selector.cell_update(cell_key, start_cell)
@@ -660,46 +633,18 @@ class Explore:
                                                   potential_cell)
                 full_traj_len = cell_copy.trajectory_len + k + 1
                 cur_score += elem.reward
-                
-                assert was_in_grid or self.should_accept_cell(potential_cell, cur_score,
-                                           full_traj_len), '\n{}\n{}'.format(potential_cell.score, cur_score)
+
                 if self.should_accept_cell(potential_cell, cur_score,
                                            full_traj_len):
                     cells_to_reset.add(potential_cell_key)
                     potential_cell.trajectory_len = full_traj_len
                     potential_cell.action_seq = np.concatenate(
-                        (cell_copy.action_seq,
-                         np.array(act_seq, dtype=np.uint8)))
+                        (cell_copy.action_seq, np.array(act_seq,
+                                                        dtype=np.uint8)))
                     potential_cell.score = cur_score
                     if cur_score > self.max_score:
                         self.max_score = cur_score
                     potential_cell.cell_frame = elem.to.frame
-
-                    # debug - check consistency
-                    # go-step
-                    if False and len(start_cell.action_seq) > 20:
-                        _, state_sac_0 = self.reset()
-                        for action in potential_cell.action_seq:
-                            _, reward, done, state_sac_1 = self.step(action)
-                            # TODO
-                            # (state_sac_0, action, reward, state_sac_1, done)
-                            state_sac_0 = state_sac_1
-                        if not np.all(
-                            self.get_frame(True) == potential_cell.cell_frame):
-                            print(start_cell.action_seq)
-                            print(potential_cell.action_seq)
-                            print(potential_cell_key == DONE)
-                            exit(0)
-                        else:
-                            print('*' * 20)
-                            print('success')
-                            print('{} + {}'.format(start_cell.action_seq, potential_cell.action_seq))
-                            print('*' * 20)
-                        #assert np.all(
-                        #    self.get_frame(True) == potential_cell.cell_frame), '\n{}\n{}\n{}\n'.format(
-                        #        self.get_frame(True), potential_cell.cell_frame, potential_cell.action_seq)
-
-
                     self.selector.cell_update(potential_cell_key,
                                               potential_cell)
         if self.args.reset_cell_on_update:

@@ -16,4 +16,4 @@ game=${1:-Pong}
 results=${2:-results}
 frames=${3:-500000000}
 
-python goexplore_py/main.py --seen_weight=1.0 --reset_cell_on_update --base_path=$results --game=generic_$game --cell_split_factor=0.125 --first_compute_archive_size=1 --first_compute_dynamic_state=10000 --max_archive_size=50000 --max_recent_frames=10000 --recent_frame_add_prob=0.01 --recompute_dynamic_state_every=10000000 --split_iterations=3000 --max_hours=256 --max_compute_steps=$frames --n_cpus=16 --batch_size=100 --dynamic_state
+python goexplore_py/main.py --seen_weight=1.0 --reset_cell_on_update --base_path=$results --game=generic_$game --cell_split_factor=0.125 --first_compute_archive_size=1 --first_compute_dynamic_state=10000 --max_archive_size=50000 --max_recent_frames=10000 --recent_frame_add_prob=0.01 --recompute_dynamic_state_every=10000000 --split_iterations=3000 --max_hours=256 --max_compute_steps=$frames --batch_size=100 --dynamic_state

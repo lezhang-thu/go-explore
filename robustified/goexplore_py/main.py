@@ -64,22 +64,22 @@ def _run(base_path, args):
         (game_class, game_args),
         pool_class=pool_cls,
         args=args,
-        important_attrs=[],
     )
-    with tqdm(desc='Time (seconds)', smoothing=0, total=MAX_TIME) as t_time, \
-            tqdm(desc='Iterations', total=MAX_ITERATIONS) as t_iter, \
-            tqdm(desc='Compute steps', total=MAX_FRAMES_COMPUTE) as t_compute, \
-            tqdm(desc='Game step', total=MAX_FRAMES) as t, \
-            tqdm(desc='Max score', total=MAX_SCORE) as t_score, \
-            tqdm(desc='Done score', total=MAX_SCORE) as t_done_score, \
-            tqdm(desc='Cells', total=MAX_CELLS) as t_cells:
-        t_compute.update(expl.frames_compute)
-        t.update(expl.frames_true)
+    #with tqdm(desc='Time (seconds)', smoothing=0, total=MAX_TIME) as t_time, \
+    #        tqdm(desc='Iterations', total=MAX_ITERATIONS) as t_iter, \
+    #        tqdm(desc='Compute steps', total=MAX_FRAMES_COMPUTE) as t_compute, \
+    #        tqdm(desc='Game step', total=MAX_FRAMES) as t, \
+    #        tqdm(desc='Max score', total=MAX_SCORE) as t_score, \
+    #        tqdm(desc='Done score', total=MAX_SCORE) as t_done_score, \
+    #        tqdm(desc='Cells', total=MAX_CELLS) as t_cells:
+    #    t_compute.update(expl.frames_compute)
+    #    t.update(expl.frames_true)
+    #    start_time = time.time()
+    #    last_time = np.round(start_time)
+    #    n_iters = 0
+    #    prev_checkpoint = None
+    if True:
         start_time = time.time()
-        last_time = np.round(start_time)
-        n_iters = 0
-        prev_checkpoint = None
-
         def should_continue():
             if MAX_TIME is not None and time.time() - start_time >= MAX_TIME:
                 return False
@@ -104,31 +104,31 @@ def _run(base_path, args):
 
             expl.run_cycle()
 
-            t.update(expl.frames_true - old)
-            t_score.update(expl.max_score - old_max_score)
-            t_done_score.n = expl.grid[DONE].score
-            t_done_score.refresh()
-            t_compute.update(expl.frames_compute - old_compute)
-            t_iter.update(1)
-            # Note: due to the archive compression that can happen with dynamic cell representation,
-            # we need to do this so that tqdm doesn't complain about negative updates.
-            t_cells.n = len(expl.grid)
-            t_cells.refresh()
+            #t.update(expl.frames_true - old)
+            #t_score.update(expl.max_score - old_max_score)
+            #t_done_score.n = expl.grid[DONE].score
+            #t_done_score.refresh()
+            #t_compute.update(expl.frames_compute - old_compute)
+            #t_iter.update(1)
+            ## Note: due to the archive compression that can happen with dynamic cell representation,
+            ## we need to do this so that tqdm doesn't complain about negative updates.
+            #t_cells.n = len(expl.grid)
+            #t_cells.refresh()
 
-            cur_time = np.round(time.time())
-            t_time.update(int(cur_time - last_time))
-            last_time = cur_time
-            n_iters += 1
+            #cur_time = np.round(time.time())
+            #t_time.update(int(cur_time - last_time))
+            #last_time = cur_time
+            #n_iters += 1
 
-            # In some circumstances (see comments), save a checkpoint and some pictures
-            if (old == 0 or  # It is the first iteration
-                    old // THRESH_TRUE != expl.frames_true // THRESH_TRUE
-                    or  # We just passed the THRESH_TRUE threshold
-                    old_compute // THRESH_COMPUTE
-                    != expl.frames_compute // THRESH_COMPUTE
-                    or  # We just passed the THRESH_COMPUTE threshold
-                    not should_continue()):  # This is the last iteration
-                expl.save_checkpoint()
+            ## In some circumstances (see comments), save a checkpoint and some pictures
+            #if (old == 0 or  # It is the first iteration
+            #        old // THRESH_TRUE != expl.frames_true // THRESH_TRUE
+            #        or  # We just passed the THRESH_TRUE threshold
+            #        old_compute // THRESH_COMPUTE
+            #        != expl.frames_compute // THRESH_COMPUTE
+            #        or  # We just passed the THRESH_COMPUTE threshold
+            #        not should_continue()):  # This is the last iteration
+            #    pass
 
 
 class Tee(object):

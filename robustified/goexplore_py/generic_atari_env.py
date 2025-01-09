@@ -111,7 +111,6 @@ class MyAtari:
         t = self._process(self.unprocessed_state)
         for _ in range(self._k):
             self._frames_sac.append(t)
-
         return copy.copy(self.state), self._stack_frame()
 
     def get_restore(self):
@@ -133,8 +132,8 @@ class MyAtari:
         self.unprocessed_state, reward, done, lol = self.env.step(action)
         # sac
         self._frames_sac.append(self._process(self.unprocessed_state))
-        # REUSE lol
-        lol = self._stack_frame()
+        del lol
+        state_sac = self._stack_frame()
 
         self.state.append(convert_state(self.unprocessed_state))
         self.state.pop(0)
@@ -144,7 +143,7 @@ class MyAtari:
             done = True
         self.prev_lives = cur_lives
 
-        return copy.copy(self.state), reward, done, lol
+        return copy.copy(self.state), reward, done, state_sac
 
     def get_pos(self):
         # NOTE: this only returns a dummy position

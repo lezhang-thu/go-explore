@@ -20,6 +20,7 @@ import shutil
 import psutil
 import time
 import uuid
+import logging
 
 import numpy as np
 from tqdm import tqdm
@@ -32,14 +33,30 @@ from goexplore_py.utils import get_code_hash
 
 VERSION = 1
 
-THRESH_TRUE = 20_000_000_000
-THRESH_COMPUTE = 1_000_000
 MAX_FRAMES = None
 MAX_FRAMES_COMPUTE = None
-MAX_ITERATIONS = None
-MAX_TIME = 12 * 60 * 60
 MAX_CELLS = None
 MAX_SCORE = None
+
+
+def setup_logging(save_dir, logger_name):
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.INFO)
+
+    ch = logging.StreamHandler(stream=sys.stdout)
+    ch.setLevel(logging.INFO)
+    formatter = logging.Formatter("[%(levelname)s: %(asctime)s] %(message)s")
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    #if not os.path.exists(save_dir):
+    #    os.makedirs(save_dir)
+
+    #fh = logging.FileHandler(os.path.join(save_dir, '{}'.format(logger_name)))
+    #fh.setLevel(logging.INFO)
+    #fh.setFormatter(formatter)
+    #logger.addHandler(fh)
+    return logger
 
 
 def _run(base_path, args):
@@ -65,58 +82,30 @@ def _run(base_path, args):
         pool_class=pool_cls,
         args=args,
     )
-    with tqdm(desc='Iterations', total=MAX_ITERATIONS) as t_iter, \
-            tqdm(desc='Compute steps', total=MAX_FRAMES_COMPUTE) as t_compute, \
-            tqdm(desc='Game step', total=MAX_FRAMES) as t, \
-            tqdm(desc='Max score', total=MAX_SCORE) as t_score, \
-            tqdm(desc='Done score', total=MAX_SCORE) as t_done_score, \
-            tqdm(desc='Cells', total=MAX_CELLS) as t_cells:
-        t_compute.update(expl.frames_compute)
-        t.update(expl.frames_true)
-        n_iters = 0
+    logger = setup_logging('output', '{}.txt'.format('None'))
 
-        def should_continue():
-            if ((MAX_FRAMES is not None and expl.frames_true >= MAX_FRAMES)
-                    or (MAX_FRAMES_COMPUTE is not None
-                        and expl.frames_compute >= MAX_FRAMES_COMPUTE) or
-                (MAX_ITERATIONS is not None and n_iters >= MAX_ITERATIONS)
-                    or (MAX_CELLS is not None and len(expl.grid) >= MAX_CELLS)
-                    or
-                (MAX_SCORE is not None and expl.max_score >= MAX_SCORE)):
-                return False
-            return True
+    def should_continue():
+        if ((MAX_FRAMES is not None and expl.frames_true >= MAX_FRAMES)
+                or (MAX_FRAMES_COMPUTE is not None
+                    and expl.frames_compute >= MAX_FRAMES_COMPUTE)
+                or (MAX_CELLS is not None and len(expl.grid) >= MAX_CELLS)
+                or (MAX_SCORE is not None and expl.max_score >= MAX_SCORE)):
+            return False
+        return True
 
-        while should_continue():
-            # Run one iteration
-            old = expl.frames_true
-            old_compute = expl.frames_compute
-            old_len_grid = len(expl.grid)
-            old_max_score = expl.max_score
+    t_compute = 0
+    while should_continue():
+        # Run one iteration
+        expl.run_cycle()
 
-            expl.run_cycle()
-
-            t.update(expl.frames_true - old)
-            t_score.update(expl.max_score - old_max_score)
-            t_done_score.n = expl.grid[DONE].score
-            t_done_score.refresh()
-            t_compute.update(expl.frames_compute - old_compute)
-            t_iter.update(1)
-            # Note: due to the archive compression that can happen with dynamic cell representation,
-            # we need to do this so that tqdm doesn't complain about negative updates.
-            t_cells.n = len(expl.grid)
-            t_cells.refresh()
-
-            n_iters += 1
-
-            # In some circumstances (see comments), save a checkpoint and some pictures
-            if (old == 0 or  # It is the first iteration
-                    old // THRESH_TRUE != expl.frames_true // THRESH_TRUE
-                    or  # We just passed the THRESH_TRUE threshold
-                    old_compute // THRESH_COMPUTE
-                    != expl.frames_compute // THRESH_COMPUTE
-                    or  # We just passed the THRESH_COMPUTE threshold
-                    not should_continue()):  # This is the last iteration
-                pass
+        if expl.frames_compute - t_compute > int(
+                1e6) or expl.frames_compute >= MAX_FRAMES_COMPUTE:
+            t_compute = expl.frames_compute
+            logger.info('Compute steps: {}'.format(expl.frames_compute))
+            logger.info('Game step: {}'.format(expl.frames_true))
+            logger.info('Max score {}'.format(expl.max_score))
+            logger.info('Done score: {}'.format(expl.grid[DONE].score))
+            logger.info('Cells: {}'.format(len(expl.grid)))
 
 
 class Tee(object):
@@ -474,12 +463,8 @@ if __name__ == '__main__':
         random.seed(args.seed)
         np.random.seed(args.seed + 1)
 
-    THRESH_TRUE = args.checkpoint_game
-    THRESH_COMPUTE = args.checkpoint_compute
     MAX_FRAMES = args.max_game_steps
     MAX_FRAMES_COMPUTE = args.max_compute_steps
-    MAX_TIME = args.max_hours * 3600
-    MAX_ITERATIONS = args.max_iterations
     MAX_CELLS = args.max_cells
     MAX_SCORE = args.max_score
 

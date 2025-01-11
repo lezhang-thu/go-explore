@@ -17,7 +17,6 @@ import pickle
 compress = bz2
 compress_suffix = '.bz2'
 compress_kwargs = {}
-n_digits = 20
 DONE = None
 
 
@@ -61,11 +60,13 @@ class Cell:
                  score=-infinity,
                  seen_times=0,
                  trajectory_len=infinity,
+                 restore=None,
                  cell_frame=None):
         self.score = score
         self._seen_times = seen_times
 
         self.trajectory_len = trajectory_len
+        self.restore = restore
         self.cell_frame = cell_frame
 
         # sac
@@ -84,8 +85,9 @@ class Cell:
 
 @dataclass
 class PosInfo:
-    __slots__ = ['cell', 'frame']
+    __slots__ = ['cell', 'restore', 'frame']
     cell: tuple
+    restore: typing.Any
     frame: typing.Any
 
 
@@ -220,6 +222,7 @@ class Explore:
         self.selector.cell_update(DONE, self.grid[DONE])
         # summary: cell_key - reset (init) cell. DONE - done cell
         self.former_grids = FormerGrids(args)
+        self.former_grids.append(copy.deepcopy(self.grid))
 
     def make_env(self):
         global ENV
@@ -234,37 +237,23 @@ class Explore:
     def step(self, action):
         return ENV.step(action)
 
-    @staticmethod
-    def get_dynamic_repr(orig_state,
-                         target_size,
-                         max_pix_val,
-                         first_compute_dynamic_state=None):
+    def get_dynamic_repr(self, orig_state):
         if isinstance(orig_state, bytes):
             orig_state = RLEArray.frombytes(orig_state, dtype=np.uint8)
         orig_state = orig_state.to_np()
         dynamic_repr = []
 
+        target_size, max_pix_val = self.dynamic_state_split_rules
         if target_size is None:
-            dynamic_repr.append(random.randint(1, first_compute_dynamic_state))
+            dynamic_repr.append(1)
         else:
             state = imdownscale(orig_state, target_size, max_pix_val)
             dynamic_repr.append(state.tobytes())
         return tuple(dynamic_repr)
 
     def try_split_frames(self, frames):
-        tqdm.write('Decoding frames')
-        frames = [
-            RLEArray.frombytes(f, dtype=np.uint8).to_np() for f in frames
-        ]
-
-        frames_np = np.array(frames)
-        shm = shared_memory.SharedMemory(create=True, size=frames_np.nbytes)
-        shared_frames = np.ndarray(frames_np.shape,
-                                   dtype=frames_np.dtype,
-                                   buffer=shm.buf)
-        np.copyto(shared_frames, frames_np)
-
-        tqdm.write('Frames decoded')
+        n_processes = multiprocessing.cpu_count()
+        frames = [RLEArray.frombytes(f, dtype=np.uint8) for f in frames]
         unif_ent_cache = {}
 
         def get_dist_score(dist):
@@ -294,49 +283,33 @@ class Explore:
         best_n = 0
         seen = set()
 
-        n_processes = multiprocessing.cpu_count()
         # Intuition: we want our batch size to be such that it will be processed in two passes
-        # len(frames): f, n_process: n
-        # the following gives: ceil( f / (2n)). ideally, into 2n segments.
-        BATCH_SIZE = (len(frames) + 2 * n_processes - 1) // (2 * n_processes)
+        BATCH_SIZE = len(frames) // (n_processes // 2 + 1) + 1
 
-        def proc_downscale(to_process, returns, batch_size, shm_name, shape,
-                           dtype):
-            existing_shm = shared_memory.SharedMemory(name=shm_name)
-            shared_frames = np.ndarray(shape,
-                                       dtype=dtype,
-                                       buffer=existing_shm.buf)
-
+        def proc_downscale(to_process, returns):
             while True:
                 start_batch, cur_shape, cur_pix_val = to_process.get()
                 if start_batch == -1:
-                    existing_shm.close()
                     return
                 results = []
-                for i in range(
-                        start_batch,
-                        min(len(shared_frames), start_batch + batch_size)):
+                for i in range(start_batch,
+                               min(len(frames), start_batch + BATCH_SIZE)):
                     results.append(
-                        imdownscale(shared_frames[i], cur_shape,
+                        imdownscale(frames[i].to_np(), cur_shape,
                                     cur_pix_val).tobytes())
                 returns.put(results)
 
-        tqdm.write('Creating processes')
         to_process = multiprocessing.Queue()
         returns = multiprocessing.Queue()
         processes = [
             multiprocessing.Process(target=proc_downscale,
-                                    args=(to_process, returns, BATCH_SIZE,
-                                          shm.name, shared_frames.shape,
-                                          shared_frames.dtype))
+                                    args=(to_process, returns))
             for _ in range(n_processes)
         ]
         for p in processes:
             p.start()
-        tqdm.write('Processes created')
 
-        for _ in tqdm(range(self.args.split_iterations),
-                      desc='New representation'):
+        for _ in range(self.args.split_iterations):
             cur_shape = best_shape
             cur_pix_val = best_pix_val
             while (cur_shape, cur_pix_val) in seen:
@@ -368,9 +341,9 @@ class Explore:
 
             if cur_score >= best_score:
                 if cur_score > best_score:
-                    tqdm.write(
-                        f'NEW BEST score: {cur_score} n: {len(dist)} shape:{cur_shape} {cur_pix_val}'
-                    )
+                    print(
+                        'NEW BEST score: {:.4f} n: {: <8} shape: ({: <3}, {: <3}) {: <3}'
+                        .format(cur_score, len(dist), *cur_shape, cur_pix_val))
                 best_score = cur_score
                 best_shape = cur_shape
                 best_n = len(dist)
@@ -379,118 +352,149 @@ class Explore:
         for i in range(n_processes):
             to_process.put((-1, None, None))
         for p in processes:
-            p.join()
-        # Clean up shared memory
-        shm.close()
-        shm.unlink()
+            try:
+                p.join(1)
+            except Exception:
+                p.terminate()
+
         return best_shape, best_pix_val, best_n
 
     def maybe_split_dynamic_state(self):
-        if not (self.frames_compute - self.last_recompute_dynamic_state
+        if (self.frames_compute - self.last_recompute_dynamic_state
                 > self.args.recompute_dynamic_state_every
                 or len(self.grid) > self.args.max_archive_size):
-            return
-        if len(self.grid) > self.args.max_archive_size:
-            tqdm.write(
-                'Recomputing representation because of archive size (should not happen too often)'
+            if len(self.grid) > self.args.max_archive_size:
+                print(
+                    'Recomputing representation because of archive size (should not happen too often)'
+                )
+            self.last_recompute_dynamic_state = self.frames_compute
+
+            print('Recomputing state representation')
+            best_shape, best_pix_val, best_n = self.try_split_frames(
+                self.random_recent_frames)
+            print(
+                f'Switching representation to {best_shape} with {best_pix_val} pixels ({best_n} / {len(self.random_recent_frames)})'
             )
-        self.last_recompute_dynamic_state = self.frames_compute
+            if self.dynamic_state_split_rules[0] is None:
+                self.grid = self.former_grids.pop()
+            self.dynamic_state_split_rules = (best_shape, best_pix_val)
 
-        tqdm.write('Recomputing state representation')
-        best_shape, best_pix_val, best_n = self.try_split_frames(
-            self.random_recent_frames)
-        tqdm.write(
-            f'Switching representation to {best_shape} with {best_pix_val} pixels ({best_n} / {len(self.random_recent_frames)})'
-        )
-        self.dynamic_state_split_rules = (best_shape, best_pix_val)
+            self.random_recent_frames.clear()
+            self.selector.clear_all_cache()
+            self.former_grids.append(self.grid)
+            self.grid = defaultdict(Cell)
 
-        self.random_recent_frames.clear()
-        self.selector.clear_all_cache()
-        self.former_grids.append(self.grid)
-        self.grid = defaultdict(Cell)
+            start = time.time()
+            for grid_idx in reversed(range(len(self.former_grids))):
+                old_grid = self.former_grids[grid_idx]
+                n_processes = multiprocessing.cpu_count()
+                to_process = multiprocessing.Queue()
+                returns = multiprocessing.Queue()
 
-        start = time.time()
-        for grid_idx in tqdm(reversed(range(len(self.former_grids))),
-                             desc='recompute_grid'):
-            tqdm.write('Loading grid')
-            old_grid = self.former_grids[grid_idx]
-            tqdm.write('Creating queues')
-            to_process = multiprocessing.Queue()
-            returns = multiprocessing.Queue()
+                def iter_grid(grid_idx, old_grid):
+                    in_queue = set()
+                    has_had_timeout = [False]
 
-            def get_repr(cell_key, cell_frame):
-                if cell_key == DONE:
-                    return ((cell_key, cell_key))
-                else:
-                    return ((cell_key,
-                             Explore.get_dynamic_repr(cell_frame, best_shape,
-                                                      best_pix_val)))
+                    def queue_process_min(min_size):
+                        while len(in_queue) > min_size:
+                            if has_had_timeout[0]:
+                                cur = in_queue.pop()
+                                _, old_key, new_key = get_repr(grid_idx, cur)
+                                yield old_key, old_grid[old_key], new_key
+                            else:
+                                import queue
+                                try:
+                                    _, old_key, new_key = returns.get(
+                                        timeout=5 * 60)
+                                    if old_key in in_queue:
+                                        in_queue.remove(old_key)
+                                        yield old_key, old_grid[
+                                            old_key], new_key
+                                    else:
+                                        print(
+                                            f'Warning: saw duplicate key: {old_key}'
+                                        )
+                                except queue.Empty:
+                                    has_had_timeout[0] = True
+                                    print(
+                                        'Warning: timeout in receiving from queue. Switching to 100% single threaded'
+                                    )
 
-            def redo_repr():
-                while True:
-                    f, cell_key, cell_frame = to_process.get()
-                    if not f:
-                        return
-                    returns.put(get_repr(cell_key, cell_frame))
+                    for k in old_grid:
+                        for to_yield in queue_process_min(n_processes):
+                            yield to_yield
+                        if not has_had_timeout[0]:
+                            to_process.put((grid_idx, k), timeout=60)
+                        in_queue.add(k)
+                    for to_yield in queue_process_min(0):
+                        yield to_yield
 
-            for cell_key, cell in tqdm(old_grid.items(), desc='add_to_grid'):
-                to_process.put((True, cell_key, cell.cell_frame))
-            tqdm.write('Creating processes')
-            n_processes = multiprocessing.cpu_count()
-            processes = [
-                multiprocessing.Process(target=redo_repr)
-                for _ in range(n_processes)
-            ]
-            tqdm.write('Starting processes')
-            for p in processes:
-                p.start()
-            tqdm.write('Processes started')
+                def get_repr(i_grid, key):
+                    frame = self.former_grids[i_grid][key].cell_frame
+                    if frame is None or key is None:
+                        return ((i_grid, key, key))
+                    else:
+                        return ((i_grid, key, self.get_dynamic_repr(frame)))
 
-            def iter_grid(num):
-                tqdm.write('Iter grid')
-                for _ in range(num):
-                    old_key, new_key = returns.get()
-                    yield old_grid[old_key], new_key
-                tqdm.write('Done iter grid')
+                def redo_repr():
+                    while True:
+                        i_grid, key = to_process.get()
+                        if i_grid is None:
+                            return
+                        returns.put(get_repr(i_grid, key))
 
-            for cell, new_key in iter_grid(len(old_grid)):
-                if new_key not in self.grid or self.should_accept_cell(
-                        self.grid[new_key], cell.score, cell.trajectory_len):
-                    t = self.grid[new_key]
-                    t.score = cell.score
-                    t.trajectory_len = cell.trajectory_len
-                    t.action_seq = cell.action_seq
-                    t.cell_frame = cell.cell_frame
-
-                    if self.args.reset_cell_on_update:
-                        self.grid[new_key].set_seen_times(cell.seen_times)
-                    # TODO verify. else: in self.grid but worse. then, cell.seen_times is the same
+                processes = [
+                    multiprocessing.Process(target=redo_repr)
+                    for _ in range(n_processes)
+                ]
+                for p in processes:
+                    p.start()
+                for cell_key, cell, new_key in iter_grid(grid_idx, old_grid):
+                    if new_key not in self.grid or self.should_accept_cell(
+                            self.grid[new_key], cell.score,
+                            cell.trajectory_len):
+                        if new_key not in self.grid:
+                            self.grid[new_key] = Cell()
+                        self.grid[new_key].score = cell.score
+                        self.grid[new_key].trajectory_len = cell.trajectory_len
+                        self.grid[new_key].restore = cell.restore
+                        self.grid[new_key].action_seq = cell.action_seq
+                        self.grid[new_key].cell_frame = cell.cell_frame
+                        if self.args.reset_cell_on_update:
+                            self.grid[new_key].set_seen_times(cell.seen_times)
                     self.selector.cell_update(new_key, self.grid[new_key])
-            tqdm.write('Clearing processes')
-            for _ in range(n_processes):
-                to_process.put((False, None, None))
-            for p in tqdm(processes, desc='processes_clear'):
-                p.join()
-            tqdm.write('Processes cleared')
-        tqdm.write(f'Recomputing the grid took {time.time() - start} seconds')
-        self.prev_len_grid = len(self.grid)
-        tqdm.write(
-            f'New size: {len(self.grid)}. Old size: {len(self.former_grids[-1])}'
-        )
+                for _ in range(n_processes):
+                    to_process.put((None, None), block=False)
+                for p in processes:
+                    try:
+                        p.join(timeout=1)
+                    except Exception:
+                        p.terminate()
+                        p.join()
+            self.prev_len_grid = len(self.grid)
+            print(
+                f'New size: {len(self.grid)}. Old size: {len(self.former_grids[-1])}'
+            )
 
     def get_frame(self, asbytes):
         frame = ENV.state[-1]
         return frame.tobytes() if asbytes else frame
 
-    def get_pos_info(self):
+    def get_pos_info(self, include_restore=True):
         return PosInfo(
             self.get_cell(),
+            self.get_restore() if include_restore else None,
             self.get_frame(True) if self.args.dynamic_state else None)
 
+    def get_restore(self):
+        return ENV.get_restore()
+
+    def restore(self, val):
+        self.make_env()
+        ENV.restore(val)
+
     def get_cell(self):
-        return self.get_dynamic_repr(self.get_frame(False),
-                                     *self.dynamic_state_split_rules,
-                                     self.args.first_compute_dynamic_state)
+        return self.get_dynamic_repr(self.get_frame(False))
 
     def run_explorer(self, explorer, state_sac_0=None, max_steps=-1):
         trajectory = []
@@ -532,7 +536,7 @@ class Explore:
         self.frames_compute = 0
 
         # go-step
-        _, state_sac_0 = self.reset()
+        #_, state_sac_0 = self.reset()
         #for action in cell.action_seq:
         #    _, reward, done, state_sac_1 = self.step(action)
         #    # TODO
@@ -540,7 +544,14 @@ class Explore:
         #    state_sac_0 = state_sac_1
         #assert np.all(self.get_frame(True) == cell.cell_frame)
 
-        self.frames_true += len(cell.action_seq)
+        #self.frames_true += len(cell.action_seq)
+        state_sac_0 = None
+        if cell.restore is not None:
+            self.restore(cell.restore)
+            self.frames_true += cell.trajectory_len
+        else:
+            assert cell.trajectory_len == 0, 'Cells must have a restore unless they are the initial state'
+            self.reset()
         # explore-step
         end_trajectory = self.run_seed(seed,
                                        state_sac_0,
@@ -613,6 +624,8 @@ class Explore:
             self.selector.cell_update(cell_key, start_cell)
 
             cur_score = cell_copy.score
+            potential_cell = start_cell
+            old_potential_cell_key = cell_key
             act_seq = list()
             for k, elem in enumerate(end_trajectory):
                 act_seq.append(elem.action)
@@ -620,17 +633,19 @@ class Explore:
                 if potential_cell_key != DONE and (
                         random.random() < self.args.recent_frame_add_prob):
                     self.random_recent_frames.add(elem.to.frame)
-                was_in_grid = potential_cell_key in self.grid
-                # type(self.grid): defaultdict(Cell)
-                # was_in_grid should run beforehand
-                # potential_cell might be a new cell, or old. it depends!
-                potential_cell = self.grid[potential_cell_key]
-                if potential_cell_key not in seen_cells:
-                    seen_cells.add(potential_cell_key)
-                    potential_cell.inc_seen_times(1)
-                    if was_in_grid:
-                        self.selector.cell_update(potential_cell_key,
-                                                  potential_cell)
+                if potential_cell_key != old_potential_cell_key:
+                    was_in_grid = potential_cell_key in self.grid
+                    # type(self.grid): defaultdict(Cell)
+                    # was_in_grid should run beforehand
+                    # potential_cell might be a new cell, or old. it depends!
+                    potential_cell = self.grid[potential_cell_key]
+                    if potential_cell_key not in seen_cells:
+                        seen_cells.add(potential_cell_key)
+                        potential_cell.inc_seen_times(1)
+                        if was_in_grid:
+                            self.selector.cell_update(potential_cell_key,
+                                                      potential_cell)
+                old_potential_cell_key = potential_cell_key
                 full_traj_len = cell_copy.trajectory_len + k + 1
                 cur_score += elem.reward
 
@@ -638,6 +653,7 @@ class Explore:
                                            full_traj_len):
                     cells_to_reset.add(potential_cell_key)
                     potential_cell.trajectory_len = full_traj_len
+                    potential_cell.restore = elem.to.restore
                     potential_cell.action_seq = np.concatenate(
                         (cell_copy.action_seq, np.array(act_seq,
                                                         dtype=np.uint8)))

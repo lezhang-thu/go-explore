@@ -91,15 +91,15 @@ class MyAtari:
     def __getattr__(self, e):
         return getattr(self.env, e)
 
-    # sac
-    def _process(self, t):
-        t = cv2.cvtColor(t, cv2.COLOR_RGB2GRAY)
-        t = cv2.resize(t, (self._w, self._h), interpolation=cv2.INTER_AREA)
-        return np.expand_dims(t, -1)
+    ## sac
+    #def _process(self, t):
+    #    t = cv2.cvtColor(t, cv2.COLOR_RGB2GRAY)
+    #    t = cv2.resize(t, (self._w, self._h), interpolation=cv2.INTER_AREA)
+    #    return np.expand_dims(t, -1)
 
-    # sac
-    def _stack_frame(self):
-        return np.concatenate(list(self._frames_sac), axis=-1)
+    ## sac
+    #def _stack_frame(self):
+    #    return np.concatenate(list(self._frames_sac), axis=-1)
 
     def reset(self) -> np.ndarray:
         self.env = gym.make(f'{self.name}Deterministic-v4')
@@ -107,35 +107,32 @@ class MyAtari:
         self.unprocessed_state = self.env.reset()
         self.state = [convert_state(self.unprocessed_state)]
 
+        ## sac
+        #t = self._process(self.unprocessed_state)
+        #for _ in range(self._k):
+        #    self._frames_sac.append(t)
+        return copy.copy(self.state), None#self._stack_frame()
+
+    def get_restore(self):
+        return (self.unwrapped.clone_state(), copy.copy(self.state),
+                self.env._elapsed_steps, copy.copy(self._frames_sac))
+
+    def restore(self, data):
+        (full_state, state, elapsed_steps, t) = data
+        self.state = copy.copy(state)
         # sac
-        t = self._process(self.unprocessed_state)
-        for _ in range(self._k):
-            self._frames_sac.append(t)
-        return copy.copy(self.state), self._stack_frame()
+        self._frames_sac = copy.copy(t)
 
-    #def get_restore(self):
-    #    return (self.unwrapped.clone_state(), copy.copy(self.state),
-    #            self.env._elapsed_steps, copy.copy(self._frames_sac))
-
-    #def restore(self, data):
-    #    (full_state, state, elapsed_steps, t) = data
-    #    self.state = copy.copy(state)
-    #    # sac
-    #    self._frames_sac = copy.copy(t)
-
-    #    self.env.reset()
-    #    self.env._elapsed_steps = elapsed_steps
-    #    self.env.unwrapped.restore_state(full_state)
-    #    return copy.copy(self.state)
+        self.env.reset()
+        self.env._elapsed_steps = elapsed_steps
+        self.env.unwrapped.restore_state(full_state)
+        return copy.copy(self.state)
 
     def step(self, action) -> typing.Tuple[np.ndarray, float, bool, dict]:
         self.unprocessed_state, reward, done, lol = self.env.step(action)
         # sac
-        self._frames_sac.append(self._process(self.unprocessed_state))
-        #print(lol)
-        #exit(0)
-        #del lol
-        state_sac = self._stack_frame()
+        #self._frames_sac.append(self._process(self.unprocessed_state))
+        #state_sac = self._stack_frame()
 
         self.state.append(convert_state(self.unprocessed_state))
         self.state.pop(0)
@@ -145,18 +142,4 @@ class MyAtari:
             done = True
         self.prev_lives = cur_lives
 
-        return copy.copy(self.state), reward, done, state_sac
-
-    #def get_pos(self):
-    #    # NOTE: this only returns a dummy position
-    #    return AtariPosLevel()
-
-    #def render_with_known(self,
-    #                      known_positions,
-    #                      resolution,
-    #                      show=True,
-    #                      filename=None,
-    #                      combine_val=max,
-    #                      get_val=lambda x: x.score,
-    #                      minmax=None):
-    #    pass
+        return copy.copy(self.state), reward, done, None#state_sac

@@ -99,7 +99,7 @@ def _run(base_path, args):
         expl.run_cycle()
 
         if expl.frames_compute - t_compute > int(
-                1e6) or expl.frames_compute >= MAX_FRAMES_COMPUTE:
+                1e5) or expl.frames_compute >= MAX_FRAMES_COMPUTE:
             t_compute = expl.frames_compute
             logger.info('Compute steps: {}'.format(expl.frames_compute))
             logger.info('Game step: {}'.format(expl.frames_true))

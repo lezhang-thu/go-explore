@@ -102,7 +102,7 @@ class MyAtari:
     #    return np.concatenate(list(self._frames_sac), axis=-1)
 
     def reset(self) -> np.ndarray:
-        self.env = gym.make(f'{self.name}Deterministic-v4')
+        #self.env = gym.make(f'{self.name}Deterministic-v4')
         self.unwrapped.seed(0)
         self.unprocessed_state = self.env.reset()
         self.state = [convert_state(self.unprocessed_state)]

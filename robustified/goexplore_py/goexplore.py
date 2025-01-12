@@ -536,22 +536,22 @@ class Explore:
         self.frames_compute = 0
 
         # go-step
-        #_, state_sac_0 = self.reset()
-        #for action in cell.action_seq:
-        #    _, reward, done, state_sac_1 = self.step(action)
-        #    # TODO
-        #    # (state_sac_0, action, reward, state_sac_1, done)
-        #    state_sac_0 = state_sac_1
-        #assert np.all(self.get_frame(True) == cell.cell_frame)
+        _, state_sac_0 = self.reset()
+        for action in cell.action_seq:
+            _, reward, done, state_sac_1 = self.step(action)
+            # TODO
+            # (state_sac_0, action, reward, state_sac_1, done)
+            state_sac_0 = state_sac_1
+        assert np.all(self.get_frame(True) == cell.cell_frame)
 
-        #self.frames_true += len(cell.action_seq)
-        state_sac_0 = None
-        if cell.restore is not None:
-            self.restore(cell.restore)
-            self.frames_true += cell.trajectory_len
-        else:
-            assert cell.trajectory_len == 0, 'Cells must have a restore unless they are the initial state'
-            self.reset()
+        self.frames_true += len(cell.action_seq)
+        #state_sac_0 = None
+        #if cell.restore is not None:
+        #    self.restore(cell.restore)
+        #    self.frames_true += cell.trajectory_len
+        #else:
+        #    assert cell.trajectory_len == 0, 'Cells must have a restore unless they are the initial state'
+        #    self.reset()
         # explore-step
         end_trajectory = self.run_seed(seed,
                                        state_sac_0,

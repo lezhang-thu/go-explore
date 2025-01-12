@@ -93,11 +93,13 @@ class PosInfo:
 
 @dataclass
 class TrajectoryElement:
-    __slots__ = ['to', 'action', 'reward', 'done']
+    __slots__ = ['to', 'action', 'reward', 'done', 's0', 's1']
     to: PosInfo
     action: int
     reward: float
     done: bool
+    s0: np.ndarray
+    s1: np.ndarray
 
 
 class RotatingSet:
@@ -192,6 +194,7 @@ class Explore:
 
         self.env_info = env
         self.make_env()
+        print('ENV action_space.n: {}'.format(ENV.action_space.n))
         POOL = pool_class(multiprocessing.cpu_count(), )
 
         self.explorer = explorer_policy
@@ -503,9 +506,6 @@ class Explore:
                 break
             action = explorer.get_action(ENV)
             _, reward, done, state_sac_1 = self.step(action)
-            # TODO
-            # (state_sac_0, action, reward, state_sac_1, done)
-            state_sac_0 = state_sac_1
 
             self.frames_true += 1
             self.frames_compute += 1
@@ -516,7 +516,10 @@ class Explore:
                     action,
                     reward,
                     done,
+                    state_sac_0,
+                    state_sac_1,
                 ))
+            state_sac_0 = state_sac_1
             if done:
                 break
         return trajectory
@@ -536,11 +539,12 @@ class Explore:
         self.frames_compute = 0
 
         # go-step
+        start_trajectory = []
         _, state_sac_0 = self.reset()
         for action in cell.action_seq:
             _, reward, done, state_sac_1 = self.step(action)
-            # TODO
-            # (state_sac_0, action, reward, state_sac_1, done)
+            start_trajectory.append(
+                (state_sac_0, action, reward, state_sac_1, done))
             state_sac_0 = state_sac_1
         assert np.all(self.get_frame(True) == cell.cell_frame)
 
@@ -556,12 +560,14 @@ class Explore:
         end_trajectory = self.run_seed(seed,
                                        state_sac_0,
                                        max_steps=self.args.explore_steps)
-        return TimedPickle(
-            (cell_key, end_trajectory, self.frames_true, self.frames_compute),
-            'ret',
-            enabled=info.enabled)
+        for t in end_trajectory:
+            start_trajectory.append((t.s0, t.action, t.reward, t.s1, t.done))
+        return TimedPickle((cell_key, end_trajectory, self.frames_true,
+                            self.frames_compute, start_trajectory),
+                           'ret',
+                           enabled=info.enabled)
 
-    def run_cycle(self):
+    def run_cycle(self, train_queue):
         # Choose a bunch of cells, send them to the workers for processing, then combine the results.
         # A lot of what this function does is only aimed at minimizing the amount of data that needs
         # to be pickled to the workers, which is why it sets a lot of variables to None only to restore
@@ -602,6 +608,10 @@ class Explore:
         trajectories = [
             e.data for e in POOL.map(self.process_cell, chosen_cells)
         ]
+        for t in trajectories:
+            # deepcopy?! TODO
+            for x in t[-1]:
+                train_queue.put(x)
         chosen_cells = [e.data for e in chosen_cells]
         for attr, v in cache.items():
             setattr(self, attr, v)
@@ -612,7 +622,7 @@ class Explore:
                         for k, c, s, shape, pix in chosen_cells]
         cells_to_reset = set()
         for ((cell_key, cell_copy, _, _, _),
-             (_, end_trajectory, ft, fc)) in zip(chosen_cells, trajectories):
+             (_, end_trajectory, ft, fc, _)) in zip(chosen_cells, trajectories):
             self.frames_true += ft
             self.frames_compute += fc
 

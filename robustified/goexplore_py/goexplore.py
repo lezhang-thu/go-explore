@@ -622,7 +622,8 @@ class Explore:
                         for k, c, s, shape, pix in chosen_cells]
         cells_to_reset = set()
         for ((cell_key, cell_copy, _, _, _),
-             (_, end_trajectory, ft, fc, _)) in zip(chosen_cells, trajectories):
+             (_, end_trajectory, ft, fc, _)) in zip(chosen_cells,
+                                                    trajectories):
             self.frames_true += ft
             self.frames_compute += fc
 

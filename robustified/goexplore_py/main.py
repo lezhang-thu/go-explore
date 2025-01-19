@@ -10,7 +10,7 @@
 import os
 import sys
 
-sys.path.insert(0, '/home/ubuntu/lezhang.thu/go-explore/robustified')
+sys.path.insert(0, '/home/ubuntu/lezhang.thu/sac-go-explore/im-go-explore/go-explore/robustified')
 print(sys.path)
 import argparse
 import copy
@@ -21,6 +21,7 @@ import psutil
 import time
 import uuid
 import logging
+import multiprocessing
 
 import numpy as np
 from tqdm import tqdm
@@ -30,6 +31,7 @@ from goexplore_py.explorers import RepeatedRandomExplorer
 from goexplore_py.goexplore import Explore, LPool, seed_pool_wrapper, DONE
 import goexplore_py.generic_atari_env as generic_atari_env
 from goexplore_py.utils import get_code_hash
+from goexplore_py.testbed.normal_ppo import sac
 
 VERSION = 1
 
@@ -83,6 +85,9 @@ def _run(base_path, args):
         args=args,
     )
     logger = setup_logging('output', '{}.txt'.format('None'))
+    communicate_queue = multiprocessing.Queue(100)
+    sac_process = multiprocessing.Process(target=sac, args=(communicate_queue, args.game.split('_')[1])) 
+    sac_process.start()
 
     def should_continue():
         if ((MAX_FRAMES is not None and expl.frames_true >= MAX_FRAMES)
@@ -96,10 +101,10 @@ def _run(base_path, args):
     t_compute = 0
     while should_continue():
         # Run one iteration
-        expl.run_cycle()
+        expl.run_cycle(communicate_queue)
 
         if expl.frames_compute - t_compute > int(
-                1e5) or expl.frames_compute >= MAX_FRAMES_COMPUTE:
+                1e6) or expl.frames_compute >= MAX_FRAMES_COMPUTE:
             t_compute = expl.frames_compute
             logger.info('Compute steps: {}'.format(expl.frames_compute))
             logger.info('Game step: {}'.format(expl.frames_true))

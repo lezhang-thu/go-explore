@@ -84,9 +84,9 @@ class MyAtari:
 
         # sac
         # FrameStack
-        self._k = 4
-        self._w, self._h = (84, 84)
-        self._frames_sac = deque([], maxlen=self._k)
+        #self._k = 4
+        #self._w, self._h = (84, 84)
+        #self._frames_sac = deque([], maxlen=self._k)
 
     def __getattr__(self, e):
         return getattr(self.env, e)
@@ -102,7 +102,7 @@ class MyAtari:
     #    return np.concatenate(list(self._frames_sac), axis=-1)
 
     def reset(self) -> np.ndarray:
-        #self.env = gym.make(f'{self.name}Deterministic-v4')
+        self.env = gym.make(f'{self.name}Deterministic-v4')
         self.unwrapped.seed(0)
         self.unprocessed_state = self.env.reset()
         self.state = [convert_state(self.unprocessed_state)]
@@ -115,13 +115,14 @@ class MyAtari:
 
     def get_restore(self):
         return (self.unwrapped.clone_state(), copy.copy(self.state),
-                self.env._elapsed_steps, copy.copy(self._frames_sac))
+                self.env._elapsed_steps)#, copy.copy(self._frames_sac))
 
     def restore(self, data):
-        (full_state, state, elapsed_steps, t) = data
+        #(full_state, state, elapsed_steps, t) = data
+        (full_state, state, elapsed_steps) = data
         self.state = copy.copy(state)
         # sac
-        self._frames_sac = copy.copy(t)
+        #self._frames_sac = copy.copy(t)
 
         self.env.reset()
         self.env._elapsed_steps = elapsed_steps

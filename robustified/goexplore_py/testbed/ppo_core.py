@@ -38,36 +38,34 @@ class MLPActorCritic(nn.Module):
         self.conv = ConvOnly(4, obs_dim)
         # build policy and value functions
         self.pi = MLPActor(obs_dim, act_dim, hidden_sizes, activation)
-        #self.v1 = nn.Sequential(nn.Linear(3136, 512), nn.ReLU(),
-        #                        nn.Linear(512, 1))
+        self.v1 = nn.Sequential(nn.Linear(3136, 512), nn.ReLU(),
+                                nn.Linear(512, 1))
         self.adv1 = nn.Sequential(nn.Linear(3136, 512), nn.ReLU(),
                                   nn.Linear(512, act_dim))
-        #self.v2 = nn.Sequential(nn.Linear(3136, 512), nn.ReLU(),
-        #                        nn.Linear(512, 1))
+        self.v2 = nn.Sequential(nn.Linear(3136, 512), nn.ReLU(),
+                                nn.Linear(512, 1))
         self.adv2 = nn.Sequential(nn.Linear(3136, 512), nn.ReLU(),
                                   nn.Linear(512, act_dim))
         self._alpha = alpha
 
     def Q_values(self, obs, logit, first_flag=True):
         if first_flag:
-            #v_function = self.v1
+            v_function = self.v1
             adv_function = self.adv1
         else:
-            #v_function = self.v2
+            v_function = self.v2
             adv_function = self.adv2
 
-        #v = v_function(obs)
+        v = v_function(obs)
         adv = adv_function(obs)
-        q = adv
         x = torch.distributions.categorical.Categorical(logits=logit)
         baseline = (adv * F.softmax(logit, -1).detach()).sum(
             -1, True) + self._alpha * x.entropy().unsqueeze(-1).detach()
-        adv = adv - baseline.detach()
-        #q = v + adv
-        #v_loss = F.huber_loss(v, baseline.detach())
+        adv = adv - baseline
+        q = v + adv
+        v_loss = F.huber_loss(v, baseline)
 
-        #return q, adv, v_loss, v
-        return q, adv, None, None
+        return q, adv, v_loss, v
 
     def act(self, obs, deterministic=False):
         with torch.no_grad():

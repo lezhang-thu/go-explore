@@ -1,14 +1,11 @@
 import os
 import sys
 
-num_threads = "4"
-os.environ["OMP_NUM_THREADS"] = num_threads  # export OMP_NUM_THREADS=4
-os.environ[
-    "OPENBLAS_NUM_THREADS"] = num_threads  # export OPENBLAS_NUM_THREADS=4
-os.environ["MKL_NUM_THREADS"] = num_threads  # export MKL_NUM_THREADS=6
-os.environ[
-    "VECLIB_MAXIMUM_THREADS"] = num_threads  # export VECLIB_MAXIMUM_THREADS=4
-os.environ["NUMEXPR_NUM_THREADS"] = num_threads  # export NUMEXPR_NUM_THREADS=6
+sys.path.insert(
+    0,
+    '/home/ubuntu/lezhang.thu/sac-go-explore/im-go-explore/go-explore/robustified'
+)
+
 import time
 import random
 import typing
@@ -76,12 +73,32 @@ class ExpertReplay:
     def collate(self, scores_recent: list) -> None:
         y = []
         self.m = 0
-        scores = [_[1] for _ in scores_recent]
-        mean = np.mean(scores)
-        std_dev = np.std(scores)
 
+        x_stamp = [_[0] for _ in scores_recent]
         for episode in self.best_10:
-            if (episode['return'] - mean) / (1e-8 + std_dev) > 1.0:
+            x_score = []
+            flag_in = False
+            for j, t in enumerate(x_stamp):
+                if t != episode['timestamp']:
+                    #if True:
+                    x_score.append(scores_recent[j][1])
+                else:
+                    assert episode['return'] == scores_recent[j][1]
+                    flag_in = True
+            if not flag_in:
+                x_score = x_score[1:]
+
+            outlier = stats.zscore(
+                np.asarray(x_score + [episode['return']],
+                           dtype=np.float32))[-1]
+            #if outlier > self.significant_thres or episode['life'] > 0:
+            if outlier > self.significant_thres:
+                #if True:
+                #if episode['life'] > 0:
+                #    episode['life'] = max(episode['life'] - 1, 0)
+                ## -1
+                #else:
+                #    episode['life'] = 5
                 y.append(episode)
                 self.m += len(episode['exp'])
         self.episodes = y
@@ -169,7 +186,6 @@ def sac(  #env_fn,
 
     # Create actor-critic module and target networks
     alpha = 1e-2
-    #alpha = 0
     ac_kwargs['alpha'] = alpha
     ac = actor_critic(376, act_dim, **ac_kwargs).cuda()
     ac_targ = deepcopy(ac)
@@ -177,7 +193,6 @@ def sac(  #env_fn,
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
     for x in ac_targ.parameters():
         x.requires_grad = False
-    q_params = itertools.chain(ac.adv1.parameters(), ac.adv2.parameters())
 
     # Experience buffer
     replay_buffer = ReplayBuffer(replay_size)
@@ -187,15 +202,13 @@ def sac(  #env_fn,
     expert_replay = ExpertReplay()
     history_len = 10
     full_opt = torch.optim.Adam(ac.parameters(), lr)
-
     # go-explore - start
     go_explore_expert_replay = ExpertReplay()
 
     # go-explore - end
 
-    def compute_pi_loss(data, conv_obs):
-        #o = ac.conv(data['obs'].cuda())
-        o = conv_obs
+    def compute_pi_loss(data):
+        o = ac.conv(data['obs'].cuda())
         _, logit_a, _ = ac.pi(o)
         action_samples = torch.swapaxes(
             torch.distributions.categorical.Categorical(logits=logit_a).sample(
@@ -215,15 +228,14 @@ def sac(  #env_fn,
         loss_pi = -(((adv - alpha * logp_pi).detach() * logp_pi).mean())
         return loss_pi
 
-    def compute_offpolicy_loss(data, conv_obs):
+    def compute_offpolicy_loss(data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data[
             'obs2'], data['done']
         r = r.cuda()
         d = d.cuda()
         a = a.cuda().unsqueeze(-1)
 
-        #o = ac.conv(o.cuda())
-        o = conv_obs
+        o = ac.conv(o.cuda())
         with torch.no_grad():
             _, logit_a, _ = ac.pi(o)
 
@@ -248,9 +260,9 @@ def sac(  #env_fn,
         x_q1 = torch.gather(q1, -1, a).squeeze(-1)
         x_q2 = torch.gather(q2, -1, a).squeeze(-1)
         return F.huber_loss(x_q1, backup) + F.huber_loss(
-            x_q2, backup)  #+ v_loss1 + v_loss2
+            x_q2, backup) + v_loss1 + v_loss2
 
-    def im_loss(data, epsilon_low=0.2, epsilon_high=0.2):
+    def im_loss(data):
         a = data['act'].cuda().unsqueeze(-1)
         pi_old = data['pi_old'].cuda().unsqueeze(-1)
 
@@ -268,13 +280,14 @@ def sac(  #env_fn,
             adv = mask * adv2 + (~mask) * adv1
 
         ratio = F.softmax(logit_a, -1).gather(-1, a) / pi_old
+        epsilon_low = 0.2
+        epsilon_high = 0.2
+
         logp_pi = F.log_softmax(logit_a, -1).gather(-1, a)
         x = (adv - alpha * logp_pi).detach()
         # debug - start
         spec = (ratio < 1 - epsilon_low) & (x < 0)
         x[spec] = torch.abs(x).mean()
-        if random.uniform(0, 1) < 0.01:
-            logger.info("adv.mean(): {}".format(x.mean()))
 
         loss_ppo = torch.min(
             ratio * x,
@@ -283,60 +296,46 @@ def sac(  #env_fn,
         loss_ppo = -loss_ppo
         return loss_ppo
 
-    def imitation_game(data):
-        a = data['act'].cuda().unsqueeze(-1)
-        o = ac.conv(data['obs'].cuda())
-        logit_a = ac.pi(o)[1]
-        logp_pi = F.log_softmax(logit_a, -1).gather(-1, a)
-        return -(logp_pi.mean())
-
     def update():
         x = replay_buffer.sample(batch_size)
-        conv_obs = ac.conv(x['obs']).cuda()
         full_opt.zero_grad()
-        (compute_offpolicy_loss(x, conv_obs) +
-         compute_pi_loss(x, conv_obs)).backward()
+        compute_offpolicy_loss(x).backward()
         full_opt.step()
 
-        #if False:
-        ##if expert_replay.m >= batch_size:  # and random.uniform(0, 1) < 0.25:
-        #    x = expert_replay.sample(batch_size)
-        #    full_opt.zero_grad()
-        #    im_loss(x, 0.2, 0.2).backward()
-        #    full_opt.step()
+        x = replay_buffer.sample(batch_size, True)
+        full_opt.zero_grad()
+        compute_pi_loss(x).backward()
+        full_opt.step()
 
-        #    #full_opt.zero_grad()
-        #    #compute_offpolicy_loss(x).backward()
-        #    #full_opt.step()
+        full_opt.zero_grad()
+        compute_offpolicy_loss(x).backward()
+        full_opt.step()
 
-        #    #full_opt.zero_grad()
-        #    #compute_offpolicy_loss(expert_replay.sample(batch_size)).backward()
-        #    #full_opt.step()
-        if go_explore_expert_replay.m >= batch_size:  # and random.uniform(0, 1) < 0.25:
-            #if False and random.uniform(0, 1) < 0.25:
-            #    logger.info("run within go_explore_expert_replay")
-            x = go_explore_expert_replay.sample(batch_size)
-            for p in q_params:
-                p.requires_grad = False
+        if False:
+        #if expert_replay.m >= batch_size:  # and random.uniform(0, 1) < 0.25:
+            x = expert_replay.sample(batch_size)
             full_opt.zero_grad()
-            #im_loss(x).backward()
-            imitation_game(x).backward()
+            im_loss(x).backward()
             full_opt.step()
-            for p in q_params:
-                p.requires_grad = True
 
             #full_opt.zero_grad()
             #compute_offpolicy_loss(x).backward()
             #full_opt.step()
 
             #full_opt.zero_grad()
-            #compute_pi_loss(x).backward()
+            #compute_offpolicy_loss(expert_replay.sample(batch_size)).backward()
             #full_opt.step()
+        if go_explore_expert_replay.m >= batch_size:  # and random.uniform(0, 1) < 0.25:
+            x = go_explore_expert_replay.sample(batch_size)
+            full_opt.zero_grad()
+            im_loss(x).backward()
+            full_opt.step()
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
-            #for x, x_targ in zip([ac.v1, ac.adv1, ac.v2, ac.adv2, ac.pi], [
-            for x, x_targ in zip([ac.adv1, ac.adv2, ac.pi],
-                                 [ac_targ.adv1, ac_targ.adv2, ac_targ.pi]):
+            for x, x_targ in zip([ac.v1, ac.adv1, ac.v2, ac.adv2, ac.pi], [
+                    ac_targ.v1, ac_targ.adv1, ac_targ.v2, ac_targ.adv2,
+                    ac_targ.pi
+            ]):
                 for p, p_targ in zip(x.parameters(), x_targ.parameters()):
                     # NB: We use an in-place operations "mul_", "add_" to update target
                     # params, as opposed to "mul" and "add", which would make new tensors.
@@ -381,10 +380,6 @@ def sac(  #env_fn,
     episode_s_a = []
     # debug - end
 
-    # go-explore - start
-    go_explore_episodic_returns = deque(maxlen=history_len)
-    # go-explore - end
-
     logger = setup_logging('output', '{}.txt'.format('sac'))
     # Prepare for interaction with environment
     total_steps = steps_per_epoch * epochs
@@ -392,12 +387,9 @@ def sac(  #env_fn,
     o, ep_ret, ep_len = env.reset(), 0, 0
     ep_ret_best = -1e5
     # Main loop: collect experience in env and update/log each epoch
-    t = 0
-    #for t in range(1, total_steps + 1):
-    while True:
-        t += 1
-        #if t > start_steps:
-        if True:
+    for t in range(1, total_steps + 1):
+        if t > start_steps:
+            #if True:
             a, pi_old = get_action(o)
         else:
             a = env.action_space.sample()
@@ -446,7 +438,7 @@ def sac(  #env_fn,
 
             o, ep_ret, ep_len = env.reset(), 0, 0
         # go-explore - start
-        if not communicate_queue.empty():
+        if communicate_queue is not None and not communicate_queue.empty():
             list_of_actions, cumulative_reward, timestamp = communicate_queue.get(
             )
             go_explore_episode_s_a = []
@@ -476,14 +468,9 @@ def sac(  #env_fn,
                         'exp':
                         go_explore_episode_s_a,
                     })
-                    go_explore_episodic_returns.append((timestamp, score))
-                    #if len(go_explore_episodic_returns) >= history_len:
-                    if len(list(episodic_returns)) > 9:
-                        go_explore_expert_replay.collate(
-                            #list(go_explore_episodic_returns))
-                            list(episodic_returns))
+        if len(episodic_returns) >= history_len:
+            go_explore_expert_replay.collate(list(episodic_returns))
         # go-explore - end
-
         # Update handling
         if t >= update_after and t % update_every == 0:
             for j in range(update_every):
@@ -494,14 +481,12 @@ def sac(  #env_fn,
             gc.collect()
 
         # End of epoch handling
-        if False and t % (10 * steps_per_epoch) == 0:
+        if t % steps_per_epoch == 0:
             epoch = t // steps_per_epoch
 
             # Test the performance of the deterministic version of the agent.
-            #if epoch in {10, epochs}:
-            if True:
-                #val_ep_ret, val_ep_len = val_agent(100)
-                val_ep_ret, val_ep_len = val_agent(1)
+            if epoch in {10, epochs}:
+                val_ep_ret, val_ep_len = val_agent(100)
                 logger.info('test score@epoch {}: {}, ep_len: {}'.format(
                     epoch, val_ep_ret, val_ep_len))
 
@@ -536,8 +521,6 @@ if __name__ == '__main__':
 
     print("env: {}, seed: {}, epochs: {}".format(args.env, args.seed,
                                                  args.epochs))
-
-    torch.set_num_threads(int(num_threads))
     seed = args.seed
     torch.manual_seed(seed)
     random.seed(seed + 1)

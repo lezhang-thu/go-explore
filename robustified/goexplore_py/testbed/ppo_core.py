@@ -13,8 +13,19 @@ class MLPActor(nn.Module):
         super().__init__()
         self.net = nn.Sequential(nn.Linear(3136, 512), nn.ReLU(),
                                  nn.Linear(512, num_actions))
+        #self.im = nn.Sequential(nn.Linear(3136, 512), nn.ReLU(),
+        #                        nn.Linear(512, num_actions))
+        #self.gate = nn.Sequential(nn.Linear(3136, 512), nn.ReLU(),
+        #                          nn.Linear(512, 2))
 
     def forward(self, obs, deterministic=False, with_logprob=True):
+        #expert_probs = torch.stack(
+        #    [F.softmax(expert(obs), -1) for expert in (self.net, self.im)],
+        #    dim=1)
+        #gate_probs = F.softmax(self.gate(obs), dim=-1)
+        #logit = torch.log(
+        #    torch.sum(gate_probs.unsqueeze(-1) * expert_probs, dim=1))
+
         logit = self.net(obs)
         if deterministic:
             actions = logit.argmax(1)

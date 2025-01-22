@@ -11,8 +11,8 @@
 
 
 
-game=${1:-MontezumaRevenge}
-#game=${1:-Pong}
+#game=${1:-MontezumaRevenge}
+game=${1:-Pong}
 results=${2:-results}
 frames=${3:-500000000}
 

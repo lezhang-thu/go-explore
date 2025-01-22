@@ -9,6 +9,7 @@
 
 from collections import deque
 import numpy as np
+from gym.wrappers import TimeLimit 
 
 from .basics import *
 from .import_ai import *
@@ -72,7 +73,7 @@ class MyAtari:
 
     def __init__(self, name, x_repeat=2, end_on_death=False):
         self.name = name
-        self.env = gym.make(f'{name}Deterministic-v4')
+        self.env = TimeLimit(gym.make('{}Deterministic-v4'.format(self.name)), max_episode_steps=10_000)
         self.unwrapped.seed(0)
         self.env.reset()
         self.state = []
@@ -102,7 +103,7 @@ class MyAtari:
     #    return np.concatenate(list(self._frames_sac), axis=-1)
 
     def reset(self) -> np.ndarray:
-        self.env = gym.make(f'{self.name}Deterministic-v4')
+        self.env = TimeLimit(gym.make('{}Deterministic-v4'.format(self.name)), max_episode_steps=10_000)
         self.unwrapped.seed(0)
         self.unprocessed_state = self.env.reset()
         self.state = [convert_state(self.unprocessed_state)]

@@ -221,8 +221,9 @@ def sac(  #env_fn,
 
     # go-explore - end
 
-    def compute_pi_loss(data):
+    def compute_pi_loss(data, conv_obs=None):
         o = ac.conv(data['obs'].cuda())
+        #o = conv_obs
         _, logit_a, _ = ac.pi(o)
         action_samples = torch.swapaxes(
             torch.distributions.categorical.Categorical(logits=logit_a).sample(
@@ -242,7 +243,7 @@ def sac(  #env_fn,
         loss_pi = -(((adv - alpha * logp_pi).detach() * logp_pi).mean())
         return loss_pi
 
-    def compute_offpolicy_loss(data):
+    def compute_offpolicy_loss(data, conv_obs=None):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data[
             'obs2'], data['done']
         r = r.cuda()
@@ -250,6 +251,7 @@ def sac(  #env_fn,
         a = a.cuda().unsqueeze(-1)
 
         o = ac.conv(o.cuda())
+        #o = conv_obs
         with torch.no_grad():
             _, logit_a, _ = ac.pi(o)
 
@@ -276,7 +278,7 @@ def sac(  #env_fn,
         return F.huber_loss(x_q1, backup) + F.huber_loss(
             x_q2, backup) + v_loss1 + v_loss2
 
-    def im_loss(data):
+    def im_loss(data, epsilon_low=0.2, epsilon_high=0.2):
         a = data['act'].cuda().unsqueeze(-1)
         pi_old = data['pi_old'].cuda().unsqueeze(-1)
 
@@ -319,10 +321,34 @@ def sac(  #env_fn,
         logp_pi = F.log_softmax(logit_a, -1).gather(-1, a)
         return -(logp_pi.mean())  #- (gate.mean())
 
+    def awake(data):
+        a = data['act'].cuda().unsqueeze(-1)
+        o = ac.conv(data['obs'].cuda())
+        logit_a = ac.pi(o)[1]
+        logp_pi = F.log_softmax(logit_a, -1).gather(-1, a)
+        with torch.no_grad():
+            q1, adv1, _, _ = ac.Q_values(o, logit_a, True)
+            q2, adv2, _, _ = ac.Q_values(o, logit_a, False)
+            y_q1 = torch.gather(q1, -1, a)
+            y_q2 = torch.gather(q2, -1, a)
+            adv1 = torch.gather(adv1, -1, a)
+            adv2 = torch.gather(adv2, -1, a)
+            mask = y_q1 > y_q2
+            adv = mask * adv2 + (~mask) * adv1
+            weight = torch.exp((adv - alpha * logp_pi) / 2.)
+        return -((logp_pi * weight).mean())
+
     def update():
         x = replay_buffer.sample(batch_size)
         full_opt.zero_grad()
-        compute_offpolicy_loss(x).backward()
+
+        #conv_obs = ac.conv(x['obs']).cuda()
+        conv_obs = None
+        #loss = compute_offpolicy_loss(x, conv_obs) + compute_pi_loss(
+        #    x, conv_obs)
+        loss = compute_offpolicy_loss(x, conv_obs)
+        loss.backward()
+
         full_opt.step()
 
         x = replay_buffer.sample(batch_size, True)
@@ -334,24 +360,25 @@ def sac(  #env_fn,
         compute_offpolicy_loss(x).backward()
         full_opt.step()
 
-        if expert_replay.m >= batch_size:  # and random.uniform(0, 1) < 0.25:
-            x = expert_replay.sample(batch_size)
-            full_opt.zero_grad()
-            im_loss(x).backward()
-            full_opt.step()
+        #if expert_replay.m >= batch_size:  # and random.uniform(0, 1) < 0.25:
+        #    x = expert_replay.sample(batch_size)
+        #    full_opt.zero_grad()
+        #    im_loss(x).backward()
+        #    full_opt.step()
 
-            #full_opt.zero_grad()
-            #compute_offpolicy_loss(x).backward()
-            #full_opt.step()
+        #full_opt.zero_grad()
+        #compute_offpolicy_loss(x).backward()
+        #full_opt.step()
 
-            #full_opt.zero_grad()
-            #compute_offpolicy_loss(expert_replay.sample(batch_size)).backward()
-            #full_opt.step()
+        #full_opt.zero_grad()
+        #compute_offpolicy_loss(expert_replay.sample(batch_size)).backward()
+        #full_opt.step()
         if go_explore_expert_replay.m >= batch_size:  # and random.uniform(0, 1) < 0.25:
             x = go_explore_expert_replay.sample(batch_size)
             full_opt.zero_grad()
             #im_loss(x).backward()
-            imitation_game(x).backward()
+            #imitation_game(x).backward()
+            awake(x).backward()
             full_opt.step()
             #full_opt.zero_grad()
             #compute_offpolicy_loss(x).backward()
@@ -495,7 +522,7 @@ def sac(  #env_fn,
                         go_explore_episode_s_a,
                     })
         if len(episodic_returns) >= history_len:
-            go_explore_expert_replay.collate_go_explore(list(episodic_returns))
+            go_explore_expert_replay.collate_sil(list(episodic_returns))
         # go-explore - end
         # Update handling
         if t >= update_after and t % update_every == 0:

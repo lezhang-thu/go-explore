@@ -52,6 +52,8 @@ class ExpertReplay:
         # best 10
         x = [(episode['timestamp'], episode['return'])
              for episode in self.best_10]
+        # TODO
+        # go-explore timestamp can be string comparison
         x.sort(key=lambda v: (v[1], v[0]), reverse=True)
         kept = set([_[0] for _ in x[:10]])
         #print(x)
@@ -82,10 +84,13 @@ class ExpertReplay:
                 self.m += len(episode['exp'])
         self.episodes = y
         if former_m > 0 and self.m == 0:
-            print('Surpassing go-explore trajectories...')
+            print('surpassing expert trajectories...')
+        if former_m == 0 and self.m > 0:
+            print('start learning from expert trajectories...')
 
     def collate_sil(self, scores_recent: list) -> None:
         y = []
+        former_m = self.m
         self.m = 0
 
         x_stamp = [_[0] for _ in scores_recent]
@@ -116,6 +121,12 @@ class ExpertReplay:
                 y.append(episode)
                 self.m += len(episode['exp'])
         self.episodes = y
+        if former_m > 0 and self.m == 0:
+            print('surpassing expert trajectories...')
+            # debug
+            #self.best_10 = []
+        if former_m == 0 and self.m > 0:
+            print('start learning from expert trajectories...')
 
     def sample(self, batch_size: int) -> tuple:
         # debug - start
@@ -179,7 +190,8 @@ def sac(  #env_fn,
         ac_kwargs=dict(hidden_sizes=[256] * 2),
         seed=0,
         steps_per_epoch=int(1e4),
-        epochs=100,
+        #epochs=100,
+        epochs=100 * 200, # 200M
         replay_size=int(1e6),
         gamma=0.99,
         polyak=0.995,
@@ -199,7 +211,8 @@ def sac(  #env_fn,
     print('act_dim: {}'.format(act_dim))
 
     # Create actor-critic module and target networks
-    alpha = 1e-2
+    #alpha = 1e-2
+    alpha = 0. 
     ac_kwargs['alpha'] = alpha
     ac = actor_critic(376, act_dim, **ac_kwargs).cuda()
     ac_targ = deepcopy(ac)
@@ -222,8 +235,8 @@ def sac(  #env_fn,
     # go-explore - end
 
     def compute_pi_loss(data, conv_obs=None):
-        o = ac.conv(data['obs'].cuda())
-        #o = conv_obs
+        #o = ac.conv(data['obs'].cuda())
+        o = conv_obs
         _, logit_a, _ = ac.pi(o)
         action_samples = torch.swapaxes(
             torch.distributions.categorical.Categorical(logits=logit_a).sample(
@@ -250,8 +263,8 @@ def sac(  #env_fn,
         d = d.cuda()
         a = a.cuda().unsqueeze(-1)
 
-        o = ac.conv(o.cuda())
-        #o = conv_obs
+        #o = ac.conv(o.cuda())
+        o = conv_obs
         with torch.no_grad():
             _, logit_a, _ = ac.pi(o)
 
@@ -278,11 +291,12 @@ def sac(  #env_fn,
         return F.huber_loss(x_q1, backup) + F.huber_loss(
             x_q2, backup) + v_loss1 + v_loss2
 
-    def im_loss(data, epsilon_low=0.2, epsilon_high=0.2):
+    def im_loss(data, epsilon_low=0.2, epsilon_high=0.2, conv_obs=None):
         a = data['act'].cuda().unsqueeze(-1)
         pi_old = data['pi_old'].cuda().unsqueeze(-1)
 
-        o = ac.conv(data['obs'].cuda())
+        #o = ac.conv(data['obs'].cuda())
+        o = conv_obs 
         logit_a = ac.pi(o)[1]
 
         with torch.no_grad():
@@ -296,8 +310,8 @@ def sac(  #env_fn,
             adv = mask * adv2 + (~mask) * adv1
 
         ratio = F.softmax(logit_a, -1).gather(-1, a) / pi_old
-        epsilon_low = 0.2
-        epsilon_high = 0.2
+        #epsilon_low = 0.2
+        #epsilon_high = 0.2
 
         logp_pi = F.log_softmax(logit_a, -1).gather(-1, a)
         x = (adv - alpha * logp_pi).detach()
@@ -321,9 +335,10 @@ def sac(  #env_fn,
         logp_pi = F.log_softmax(logit_a, -1).gather(-1, a)
         return -(logp_pi.mean())  #- (gate.mean())
 
-    def awake(data):
+    def awake(data, conv_obs):
         a = data['act'].cuda().unsqueeze(-1)
-        o = ac.conv(data['obs'].cuda())
+        #o = ac.conv(data['obs'].cuda())
+        o = conv_obs
         logit_a = ac.pi(o)[1]
         logp_pi = F.log_softmax(logit_a, -1).gather(-1, a)
         with torch.no_grad():
@@ -342,23 +357,23 @@ def sac(  #env_fn,
         x = replay_buffer.sample(batch_size)
         full_opt.zero_grad()
 
-        #conv_obs = ac.conv(x['obs']).cuda()
-        conv_obs = None
-        #loss = compute_offpolicy_loss(x, conv_obs) + compute_pi_loss(
-        #    x, conv_obs)
-        loss = compute_offpolicy_loss(x, conv_obs)
+        conv_obs = ac.conv(x['obs']).cuda()
+        #conv_obs = None
+        loss = compute_offpolicy_loss(x, conv_obs) + compute_pi_loss(
+            x, conv_obs)
+        #loss = compute_offpolicy_loss(x, conv_obs)
         loss.backward()
 
         full_opt.step()
 
-        x = replay_buffer.sample(batch_size, True)
-        full_opt.zero_grad()
-        compute_pi_loss(x).backward()
-        full_opt.step()
+        #x = replay_buffer.sample(batch_size), True)
+        #full_opt.zero_grad()
+        #compute_pi_loss(x).backward()
+        #full_opt.step()
 
-        full_opt.zero_grad()
-        compute_offpolicy_loss(x).backward()
-        full_opt.step()
+        #full_opt.zero_grad()
+        #compute_offpolicy_loss(x).backward()
+        #full_opt.step()
 
         #if expert_replay.m >= batch_size:  # and random.uniform(0, 1) < 0.25:
         #    x = expert_replay.sample(batch_size)
@@ -376,9 +391,11 @@ def sac(  #env_fn,
         if go_explore_expert_replay.m >= batch_size:  # and random.uniform(0, 1) < 0.25:
             x = go_explore_expert_replay.sample(batch_size)
             full_opt.zero_grad()
-            #im_loss(x).backward()
+            conv_obs = ac.conv(x['obs'].cuda())
+            (compute_offpolicy_loss(x, conv_obs) + im_loss(x, epsilon_low=0.1, epsilon_high=0.4, conv_obs=conv_obs)).backward()
+            #(compute_offpolicy_loss(x, conv_obs) + awake(x, conv_obs=conv_obs)).backward()
             #imitation_game(x).backward()
-            awake(x).backward()
+            #awake(x).backward()
             full_opt.step()
             #full_opt.zero_grad()
             #compute_offpolicy_loss(x).backward()
@@ -439,17 +456,20 @@ def sac(  #env_fn,
     start_time = time.time()
     o, ep_ret, ep_len = env.reset(), 0, 0
     ep_ret_best = -1e5
+    flag_deterministic = False
     # Main loop: collect experience in env and update/log each epoch
     for t in range(1, total_steps + 1):
         if t > start_steps:
             #if True:
-            a, pi_old = get_action(o)
+            a, pi_old = get_action(o, flag_deterministic)
         else:
             a = env.action_space.sample()
             pi_old = np.asarray(1.0 / act_dim, dtype=np.float32)
 
         # Step the env
         o2, r, d, _ = env.step(a)
+        # debug
+        #if d: r = -1. if r == 0 else r
 
         ep_ret += r
         ep_len += 1
@@ -472,8 +492,9 @@ def sac(  #env_fn,
 
         # End of trajectory handling
         if d:
-            logger.info('t: {}, ep_ret: {}, ep_len: {}'.format(
-                t, ep_ret, ep_len))
+            logger.info(
+                'deterministic: {}, t: {}, ep_ret: {}, ep_len: {}'.format(
+                    flag_deterministic, t, ep_ret, ep_len))
 
             # debug - start
             expert_replay.append({
@@ -486,32 +507,39 @@ def sac(  #env_fn,
 
             episodic_returns.append((t, ep_ret))
             if len(episodic_returns) >= history_len:
-                expert_replay.collate_sil(list(episodic_returns))
+                pass
+                #expert_replay.collate_sil(list(episodic_returns))
+                go_explore_expert_replay.collate_sil(list(episodic_returns))
             # debug - end
 
             o, ep_ret, ep_len = env.reset(), 0, 0
+            # debug
+            #flag_deterministic = not flag_deterministic
         # go-explore - start
         if communicate_queue is not None and not communicate_queue.empty():
             list_of_actions, cumulative_reward, timestamp = communicate_queue.get(
             )
+            timestamp = 'go-explore-{}'.format(timestamp)
             go_explore_episode_s_a = []
             go_explore_env = MyAtari(env_name)
             score = 0
             s_0 = go_explore_env.reset()
             for a in list_of_actions:
                 s_1, reward, done, _ = go_explore_env.step(a)
+                #if done: reward = -1.0 if reward == 0 else reward
                 score += reward
+                # .7 heuristic. recover trajectory when greedy
                 go_explore_episode_s_a.append(
                     (s_0, a, np.clip(np.asarray(reward), -1,
-                                     1), s_1, float(done), 1.0))
+                                     1), s_1, float(done), .7))  #1.0))
                 s_0 = s_1
                 if done:
-                    assert score == cumulative_reward, 'recovering the exact trajectory error! score: {} cumulative_reward: {}'.format(
-                        score, cumulative_reward)
+                    #assert score == cumulative_reward, 'recovering the exact trajectory error! score: {} cumulative_reward: {}'.format(
+                    #    score, cumulative_reward)
                     logger.info('GOOD!!!')
                     logger.info(
-                        'go-explore t: {}, cumulative_reward: {}, #transitions: {}'
-                        .format(timestamp, cumulative_reward,
+                        'go-explore t: {: <20}, cumulative_reward: {: <10}, #transitions: {}'
+                        .format(timestamp, score,#cumulative_reward,
                                 len(go_explore_episode_s_a)))
                     go_explore_expert_replay.append({
                         'timestamp':
@@ -521,8 +549,6 @@ def sac(  #env_fn,
                         'exp':
                         go_explore_episode_s_a,
                     })
-        if len(episodic_returns) >= history_len:
-            go_explore_expert_replay.collate_sil(list(episodic_returns))
         # go-explore - end
         # Update handling
         if t >= update_after and t % update_every == 0:

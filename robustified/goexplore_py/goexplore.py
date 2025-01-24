@@ -669,9 +669,10 @@ class Explore:
                             (copy.deepcopy(potential_cell.action_seq),
                              potential_cell.score, self.frames_compute))
                         if ((self.env_info[1]['name'] == 'Pong'
-                             and self.grid[DONE].score > 20) or
+                             and self.grid[DONE].score > 0) or
                             (self.env_info[1]['name'] == 'MontezumaRevenge'
-                             and self.grid[DONE].score > 600)):
+                             #and self.grid[DONE].score > 600)):
+                             and self.grid[DONE].score >= 100)):
                             print('sleep for 24 hours...')
                             time.sleep(24 * 60 * 60)
         if self.args.reset_cell_on_update:

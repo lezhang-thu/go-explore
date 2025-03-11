@@ -561,7 +561,7 @@ class Explore:
             'ret',
             enabled=info.enabled)
 
-    def run_cycle(self, communicate_queue):
+    def run_cycle(self, communicate_queue, action_seqs):
         # Choose a bunch of cells, send them to the workers for processing, then combine the results.
         # A lot of what this function does is only aimed at minimizing the amount of data that needs
         # to be pickled to the workers, which is why it sets a lot of variables to None only to restore
@@ -664,17 +664,17 @@ class Explore:
                     self.selector.cell_update(potential_cell_key,
                                               potential_cell)
                     if potential_cell_key == DONE:
-                        print('DONE enqueue...')
-                        communicate_queue.put(
-                            (copy.deepcopy(potential_cell.action_seq),
-                             potential_cell.score, self.frames_compute))
-                        if ((self.env_info[1]['name'] == 'Pong'
-                             and self.grid[DONE].score > 0) or
-                            (self.env_info[1]['name'] == 'MontezumaRevenge'
-                             #and self.grid[DONE].score > 600)):
-                             and self.grid[DONE].score >= 100)):
-                            print('sleep for 24 hours...')
-                            time.sleep(24 * 60 * 60)
+                        #communicate_queue.put(
+                        #    (copy.deepcopy(potential_cell.action_seq),
+                        #     potential_cell.score, self.frames_compute))
+                        if potential_cell.score >= 5_000:
+                            action_seqs.append((copy.deepcopy(potential_cell.action_seq),
+                                 potential_cell.score, self.frames_compute))
+                            with open('go-explore-action-seqs.pkl', 'wb') as f:
+                                pickle.dump(action_seqs, f)
+                            print('score: {}, enqueue'.format(potential_cell.score))
+                            if len(action_seqs) > 9:
+                                exit(0)
         if self.args.reset_cell_on_update:
             for cell_key in cells_to_reset:
                 self.grid[cell_key].set_seen_times(0)
